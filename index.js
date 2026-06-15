@@ -17,7 +17,6 @@ import {
     saveChat,
     reloadCurrentChat,
     addOneMessage,
-    getRequestHeaders,
 } from '../../../../script.js';
 
 import {
