@@ -11,12 +11,12 @@ import {
     event_types,
     saveSettingsDebounced,
     getRequestHeaders,
-} from '../../../script.js';
+} from '../../../../script.js';
 
 import {
     extension_settings,
     renderExtensionTemplateAsync,
-} from '../../extensions.js';
+} from '../../../extensions.js';
 
 // Default settings
 const defaultSettings = {
@@ -399,7 +399,8 @@ function updateUI() {
  */
 async function renderSettingsPanel() {
     try {
-        const html = await renderExtensionTemplateAsync('third-party/kesatria-penghubung-baja-hitam', 'settings');
+        const extensionFolderPath = 'scripts/extensions/third-party/kesatria-penghubung-baja-hitam';
+        const html = await $.get(`${extensionFolderPath}/html/settings.html`);
         return html;
     } catch (error) {
         debugLog('Failed to render settings template:', error);
