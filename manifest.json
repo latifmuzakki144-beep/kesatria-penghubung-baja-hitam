@@ -1,0 +1,11 @@
+{
+    "display_name": "⚔️ Kesatria Penghubung Baja Hitam",
+    "loading_order": 10,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "latifmuzakki144-beep",
+    "version": "1.0.0",
+    "homePage": "https://github.com/latifmuzakki144-beep/kesatria-penghubung-baja-hitam"
+}

@@ -1,0 +1,83 @@
+<div id="kesatria-settings">
+    <!-- Header -->
+    <div class="kesatria-header">
+        <div class="kesatria-header-icon">⚔️</div>
+        <div class="kesatria-header-text">
+            <h3>Kesatria Penghubung Baja Hitam</h3>
+            <p>OpenClaw Bridge - Connect to Termux/OpenClaw</p>
+        </div>
+    </div>
+
+    <!-- Status Indicator -->
+    <div class="kesatria-status-container">
+        <div id="kesatria-status-dot" class="kesatria-status-dot kesatria-status-disconnected"></div>
+        <div class="kesatria-status-info">
+            <div id="kesatria-status-text" class="kesatria-status-text kesatria-status-disconnected">
+                DISCONNECTED
+            </div>
+            <div id="kesatria-last-message" class="kesatria-last-message"></div>
+        </div>
+        <button id="kesatria-reconnect" class="menu_button" title="Reconnect">
+            🔄
+        </button>
+    </div>
+
+    <!-- Settings Form -->
+    <div class="kesatria-settings-form">
+        <!-- Bridge URL -->
+        <div class="kesatria-input-group">
+            <label for="kesatria-bridge-url">🌐 Bridge Server URL</label>
+            <input 
+                type="url" 
+                id="kesatria-bridge-url" 
+                placeholder="https://your-bridge-url.trycloudflare.com"
+                autocomplete="off"
+                spellcheck="false"
+            />
+            <span class="hint">URL of the bridge server (e.g., Cloudflare tunnel URL)</span>
+        </div>
+
+        <!-- Session ID -->
+        <div class="kesatria-input-group">
+            <label for="kesatria-session-id">🔑 Session ID</label>
+            <input 
+                type="text" 
+                id="kesatria-session-id" 
+                placeholder="session-xxxxx"
+                autocomplete="off"
+                spellcheck="false"
+            />
+            <span class="hint">Unique session identifier (auto-generated)</span>
+        </div>
+
+        <!-- Auto Connect -->
+        <div class="kesatria-checkbox-group">
+            <input type="checkbox" id="kesatria-auto-connect" />
+            <label for="kesatria-auto-connect">Auto-connect on startup</label>
+        </div>
+
+        <!-- Debug Mode -->
+        <div class="kesatria-checkbox-group">
+            <input type="checkbox" id="kesatria-debug" />
+            <label for="kesatria-debug">Enable debug logging</label>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="kesatria-buttons">
+            <button id="kesatria-toggle" class="menu_button success_button">
+                Enable
+            </button>
+        </div>
+    </div>
+
+    <!-- Session Info -->
+    <div class="kesatria-session-info">
+        <p>💡 <strong>How to use:</strong></p>
+        <p>1. Start the bridge server on your Termux/OpenClaw</p>
+        <p>2. Enter the bridge URL above</p>
+        <p>3. Click "Enable" to connect</p>
+        <p style="margin-top: 10px; font-size: 10px; opacity: 0.7;">
+            Extension Version: 1.0.0 | Author: latifmuzakki144-beep
+        </p>
+    </div>
+</div>
