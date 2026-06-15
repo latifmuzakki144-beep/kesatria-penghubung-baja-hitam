@@ -2,7 +2,8 @@
  * ⚔️ Kesatria Penghubung Baja Hitam
  * SillyTavern Extension - OpenClaw Bridge
  * 
- * Connects SillyTavern to Termux/OpenClaw via bridge server
+ * Connects SillyTavern to Hermes/Termux via bridge server
+ * Allows Hermes to send messages AS the user and control SillyTavern
  */
 
 // Import SillyTavern APIs
@@ -11,11 +12,17 @@ import {
     event_types,
     saveSettingsDebounced,
     getRequestHeaders,
+    generateQuietPrompt,
+    substituteParams,
+    saveChat,
+    reloadCurrentChat,
+    addOneMessage,
+    getRequestHeaders,
 } from '../../../../script.js';
 
 import {
     extension_settings,
-    renderExtensionTemplateAsync,
+    getContext,
 } from '../../../extensions.js';
 
 // Default settings
@@ -177,7 +184,7 @@ async function pollBridge() {
 }
 
 /**
- * Handle incoming bridge request
+ * Handle incoming bridge request - MAIN DISPATCHER
  */
 async function handleBridgeRequest(request) {
     bridgeState.isProcessing = true;
@@ -186,37 +193,41 @@ async function handleBridgeRequest(request) {
     updateStatusUI();
     
     try {
-        // Build context for the AI
-        const contextStr = JSON.stringify(request.context || {}, null, 2);
-        const payloadStr = JSON.stringify(request.payload || {}, null, 2);
+        let result;
         
-        const systemPrompt = `[SYSTEM: AWARENESS TRANSFER FROM OPENCLAW/TERMUX]
-You are processing a request from the local Termux environment.
-
-Action: ${request.action || 'continue_conversation'}
-Context:
-${contextStr}
-
-Payload/Data:
-${payloadStr}
-
-Provide an appropriate response to return to Termux.`;
-
-        // Use SillyTavern's generation system
-        const response = await generateResponse(systemPrompt);
+        switch (request.action) {
+            case 'send_message':
+                result = await handleSendMessage(request);
+                break;
+                
+            case 'get_chat_history':
+                result = await handleGetChatHistory(request);
+                break;
+                
+            case 'get_character_info':
+                result = await handleGetCharacterInfo(request);
+                break;
+                
+            case 'get_chat_list':
+                result = await handleGetChatList(request);
+                break;
+                
+            case 'generate':
+                result = await handleGenerate(request);
+                break;
+                
+            default:
+                result = await handleGenericRequest(request);
+                break;
+        }
         
         // Send response back to bridge
         await sendBridgeResponse({
-            type: 'awareness_response',
+            type: 'action_response',
             session_id: extension_settings.kesatria.sessionId,
             status: 'success',
             message: 'Processed successfully by SillyTavern',
-            data: {
-                reply_text: response,
-                action_suggestions: [],
-                files_to_create: [],
-                next_steps: 'Awaiting next command.',
-            },
+            data: result,
         });
         
         bridgeState.lastMessage = 'Response sent successfully';
@@ -226,7 +237,7 @@ Provide an appropriate response to return to Termux.`;
         
         // Send error response
         await sendBridgeResponse({
-            type: 'awareness_response',
+            type: 'action_response',
             session_id: extension_settings.kesatria.sessionId,
             status: 'error',
             message: error.message || 'Internal processing error',
@@ -242,39 +253,218 @@ Provide an appropriate response to return to Termux.`;
 }
 
 /**
- * Generate response using SillyTavern's system
+ * Handle send_message - Send a message AS the user
+ * This is the key feature: Hermes can send messages as if bang jek typed them
  */
-async function generateResponse(prompt) {
-    // This will use SillyTavern's chat completion system
-    // For now, we'll use a simple fetch to the generate endpoint
-    try {
-        const response = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            headers: {
-                ...getRequestHeaders(),
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                messages: [
-                    { role: 'system', content: prompt },
-                    { role: 'user', content: 'Process this request and provide a helpful response.' },
-                ],
-                model: extension_settings.kesatria?.model || 'default',
-                max_tokens: 1000,
-            }),
-        });
-        
-        if (!response.ok) {
-            throw new Error(`Generation failed: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || 'No response generated';
-        
-    } catch (error) {
-        debugLog('Generation error:', error);
-        throw error;
+async function handleSendMessage(request) {
+    const context = getContext();
+    const message = request.payload?.message || request.payload?.text;
+    
+    if (!message) {
+        throw new Error('No message provided');
     }
+    
+    debugLog('Sending message as user:', message.substring(0, 50) + '...');
+    
+    // Method 1: Use the textarea + send button (most reliable)
+    const textarea = document.getElementById('send_textarea');
+    const sendButton = document.getElementById('send_but');
+    
+    if (textarea && sendButton) {
+        // Set the message
+        textarea.value = message;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        
+        // Click send
+        sendButton.click();
+        
+        // Wait for generation to complete
+        await waitForGeneration();
+        
+        // Get the last AI response
+        const lastMessage = getLastAIResponse();
+        
+        return {
+            success: true,
+            sent_message: message,
+            ai_response: lastMessage,
+        };
+    }
+    
+    throw new Error('Could not find send textarea or button');
+}
+
+/**
+ * Handle get_chat_history - Get the current chat messages
+ */
+async function handleGetChatHistory(request) {
+    const context = getContext();
+    const chat = context.chat || [];
+    const limit = request.payload?.limit || 50;
+    const offset = request.payload?.offset || 0;
+    
+    // Get messages with pagination
+    const messages = chat.slice(offset, offset + limit).map((msg, index) => ({
+        index: offset + index,
+        role: msg.is_user ? 'user' : 'assistant',
+        name: msg.name || (msg.is_user ? 'User' : 'Character'),
+        content: msg.mes || '',
+        timestamp: msg.send_date || null,
+        is_system: msg.is_system || false,
+    }));
+    
+    return {
+        total_messages: chat.length,
+        offset: offset,
+        limit: limit,
+        messages: messages,
+        character: context.name2 || 'Unknown',
+        persona: context.name1 || 'User',
+    };
+}
+
+/**
+ * Handle get_character_info - Get current character details
+ */
+async function handleGetCharacterInfo(request) {
+    const context = getContext();
+    
+    return {
+        character: {
+            name: context.name2 || 'Unknown',
+            description: context.description || '',
+            personality: context.personality || '',
+            scenario: context.scenario || '',
+            first_mes: context.first_mes || '',
+            avatar: context.characters?.[context.characterId]?.avatar || null,
+        },
+        user: {
+            name: context.name1 || 'User',
+            persona: context.persona || '',
+        },
+        chat: {
+            file: context.chatId || null,
+            length: (context.chat || []).length,
+        },
+    };
+}
+
+/**
+ * Handle get_chat_list - List available chats for current character
+ */
+async function handleGetChatList(request) {
+    // This is limited - we can only get what's in the context
+    const context = getContext();
+    
+    return {
+        current_chat: context.chatId || null,
+        character: context.name2 || 'Unknown',
+        message: 'Full chat list requires SillyTavern API call - use browser for this',
+    };
+}
+
+/**
+ * Handle generate - Generate a response with a custom prompt
+ */
+async function handleGenerate(request) {
+    const prompt = request.payload?.prompt || request.payload?.message;
+    
+    if (!prompt) {
+        throw new Error('No prompt provided');
+    }
+    
+    debugLog('Generating with custom prompt:', prompt.substring(0, 50) + '...');
+    
+    try {
+        const response = await generateQuietPrompt(prompt);
+        
+        return {
+            success: true,
+            prompt: prompt,
+            response: response,
+        };
+    } catch (error) {
+        throw new Error(`Generation failed: ${error.message}`);
+    }
+}
+
+/**
+ * Handle generic request - Legacy support
+ */
+async function handleGenericRequest(request) {
+    const contextStr = JSON.stringify(request.context || {}, null, 2);
+    const payloadStr = JSON.stringify(request.payload || {}, null, 2);
+    
+    const systemPrompt = `[SYSTEM: AWARENESS TRANSFER FROM HERMES/OPENCLAW]
+You are processing a request from the local environment.
+
+Action: ${request.action || 'continue_conversation'}
+Context:
+${contextStr}
+
+Payload/Data:
+${payloadStr}
+
+Provide an appropriate response.`;
+
+    try {
+        const response = await generateQuietPrompt(systemPrompt);
+        return {
+            success: true,
+            reply_text: response,
+        };
+    } catch (error) {
+        throw new Error(`Generation failed: ${error.message}`);
+    }
+}
+
+/**
+ * Wait for AI generation to complete
+ */
+function waitForGeneration() {
+    return new Promise((resolve) => {
+        const checkInterval = 500;
+        let maxWait = 60000; // 60 seconds max
+        let waited = 0;
+        
+        const check = () => {
+            const context = getContext();
+            const isGenerating = context.generating || false;
+            
+            if (!isGenerating || waited >= maxWait) {
+                // Small delay to ensure message is fully written
+                setTimeout(resolve, 1000);
+                return;
+            }
+            
+            waited += checkInterval;
+            setTimeout(check, checkInterval);
+        };
+        
+        // Start checking after a small delay
+        setTimeout(check, 1000);
+    });
+}
+
+/**
+ * Get the last AI response from chat
+ */
+function getLastAIResponse() {
+    const context = getContext();
+    const chat = context.chat || [];
+    
+    // Find last non-user message
+    for (let i = chat.length - 1; i >= 0; i--) {
+        if (!chat[i].is_user) {
+            return {
+                content: chat[i].mes || '',
+                name: chat[i].name || 'Character',
+                index: i,
+            };
+        }
+    }
+    
+    return null;
 }
 
 /**
@@ -468,5 +658,5 @@ jQuery(async () => {
     // Update UI
     updateUI();
     
-    console.log('[⚔️ Kesatria] Extension loaded successfully');
+    console.log('[⚔️ Kesatria] Extension loaded successfully - Ready for Hermes bridge');
 });
