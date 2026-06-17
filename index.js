@@ -24,7 +24,7 @@ import {
     getContext,
 } from '../../../extensions.js';
 
-// Default settings
+// ─── Default Settings ───────────────────────────
 const defaultSettings = {
     enabled: false,
     bridgeUrl: '',
@@ -34,23 +34,25 @@ const defaultSettings = {
     debugMode: false,
 };
 
-// Bridge state
+// ─── Bridge State ───────────────────────────────
 let bridgeState = {
-    status: 'disconnected', // disconnected, connected, processing, error
+    status: 'disconnected',
     lastMessage: '',
     pollingTimer: null,
     isProcessing: false,
+    connectedAt: null,
+    stats: { sent: 0, received: 0, errors: 0 },
+    logEntries: [],
+    uptimeTimer: null,
 };
 
-/**
- * Initialize extension settings
- */
+const MAX_LOG_ENTRIES = 100;
+
+// ─── Settings ───────────────────────────────────
 function loadSettings() {
     if (!extension_settings.kesatria) {
         extension_settings.kesatria = { ...defaultSettings };
     }
-    
-    // Ensure all default keys exist
     for (const key of Object.keys(defaultSettings)) {
         if (extension_settings.kesatria[key] === undefined) {
             extension_settings.kesatria[key] = defaultSettings[key];
@@ -58,53 +60,176 @@ function loadSettings() {
     }
 }
 
-/**
- * Save settings to SillyTavern
- */
 function saveSettings() {
     saveSettingsDebounced();
 }
 
-/**
- * Log debug messages
- */
 function debugLog(...args) {
     if (extension_settings.kesatria?.debugMode) {
         console.log('[⚔️ Kesatria]', ...args);
     }
 }
 
-/**
- * Update bridge status UI
- */
-function updateStatusUI() {
-    const statusDot = document.getElementById('kesatria-status-dot');
-    const statusText = document.getElementById('kesatria-status-text');
-    const lastMsg = document.getElementById('kesatria-last-message');
+// ─── Activity Log ───────────────────────────────
+function addLogEntry(type, message) {
+    const now = new Date();
+    const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     
-    if (statusDot) {
-        statusDot.className = `kesatria-status-dot kesatria-status-${bridgeState.status}`;
+    const icons = {
+        send: '➤',
+        recv: '◀',
+        err: '✖',
+        info: '●',
+        conn: '◉',
+    };
+    
+    const entry = { type, message, time, icon: icons[type] || '●' };
+    bridgeState.logEntries.unshift(entry);
+    
+    // Cap entries
+    if (bridgeState.logEntries.length > MAX_LOG_ENTRIES) {
+        bridgeState.logEntries = bridgeState.logEntries.slice(0, MAX_LOG_ENTRIES);
     }
     
-    if (statusText) {
-        statusText.textContent = bridgeState.status.toUpperCase();
-        statusText.className = `kesatria-status-text kesatria-status-${bridgeState.status}`;
+    renderLogEntries();
+}
+
+function renderLogEntries() {
+    const container = document.getElementById('kesatria-log-entries');
+    const countBadge = document.getElementById('kesatria-log-count');
+    
+    if (!container) return;
+    
+    if (bridgeState.logEntries.length === 0) {
+        container.innerHTML = '<div class="kesatria-log-empty">No activity yet</div>';
+    } else {
+        container.innerHTML = bridgeState.logEntries.map(entry => `
+            <div class="kesatria-log-entry kesatria-log-${entry.type}">
+                <span class="kesatria-log-time">${entry.time}</span>
+                <span class="kesatria-log-icon">${entry.icon}</span>
+                <span class="kesatria-log-msg">${escapeHtml(entry.message)}</span>
+            </div>
+        `).join('');
     }
     
-    if (lastMsg && bridgeState.lastMessage) {
-        lastMsg.textContent = bridgeState.lastMessage;
-        lastMsg.style.display = 'block';
-        
-        // Auto-hide after 5 seconds
-        setTimeout(() => {
-            if (lastMsg) lastMsg.style.display = 'none';
-        }, 5000);
+    if (countBadge) {
+        countBadge.textContent = bridgeState.logEntries.length;
     }
 }
 
-/**
- * Register session with bridge server
- */
+function clearLog() {
+    bridgeState.logEntries = [];
+    renderLogEntries();
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// ─── Stats ──────────────────────────────────────
+function updateStats() {
+    const sent = document.getElementById('kesatria-stat-sent');
+    const recv = document.getElementById('kesatria-stat-received');
+    const errs = document.getElementById('kesatria-stat-errors');
+    const uptime = document.getElementById('kesatria-stat-uptime');
+    
+    if (sent) sent.textContent = bridgeState.stats.sent;
+    if (recv) recv.textContent = bridgeState.stats.received;
+    if (errs) errs.textContent = bridgeState.stats.errors;
+    
+    if (uptime) {
+        if (bridgeState.connectedAt) {
+            const diff = Date.now() - bridgeState.connectedAt;
+            const mins = Math.floor(diff / 60000);
+            const hrs = Math.floor(mins / 60);
+            if (hrs > 0) {
+                uptime.textContent = `${hrs}h${mins % 60}m`;
+            } else {
+                uptime.textContent = `${mins}m`;
+            }
+        } else {
+            uptime.textContent = '--';
+        }
+    }
+}
+
+function startUptimeTimer() {
+    if (bridgeState.uptimeTimer) clearInterval(bridgeState.uptimeTimer);
+    bridgeState.uptimeTimer = setInterval(updateStats, 10000);
+}
+
+function stopUptimeTimer() {
+    if (bridgeState.uptimeTimer) {
+        clearInterval(bridgeState.uptimeTimer);
+        bridgeState.uptimeTimer = null;
+    }
+}
+
+// ─── Status UI ──────────────────────────────────
+function updateStatusUI() {
+    const dot = document.getElementById('kesatria-status-dot');
+    const label = document.getElementById('kesatria-status-text');
+    const detail = document.getElementById('kesatria-status-detail');
+    
+    const statusMap = {
+        disconnected: { class: 'kesatria-dot-off', label: 'OFFLINE', detail: '' },
+        connected: { class: 'kesatria-dot-connected', label: 'CONNECTED', detail: 'Bridge is active' },
+        processing: { class: 'kesatria-dot-processing', label: 'PROCESSING', detail: bridgeState.lastMessage },
+        error: { class: 'kesatria-dot-error', label: 'ERROR', detail: bridgeState.lastMessage },
+    };
+    
+    const s = statusMap[bridgeState.status] || statusMap.disconnected;
+    
+    if (dot) { dot.className = `kesatria-dot ${s.class}`; }
+    if (label) {
+        label.textContent = s.label;
+        label.className = `kesatria-status-label${bridgeState.status === 'error' ? ' kesatria-dot-error' : ''}`;
+    }
+    if (detail) {
+        detail.textContent = s.detail;
+        detail.style.display = s.detail ? 'block' : 'none';
+    }
+}
+
+// ─── Processing Bar ─────────────────────────────
+function showProcessing(text) {
+    const bar = document.getElementById('kesatria-processing');
+    const textEl = document.getElementById('kesatria-processing-text');
+    const fill = document.getElementById('kesatria-progress-bar');
+    
+    if (bar) bar.style.display = 'block';
+    if (textEl) textEl.textContent = text || 'Processing...';
+    if (fill) {
+        fill.style.width = '0%';
+        // Animate progress
+        let progress = 0;
+        const interval = setInterval(() => {
+            progress += Math.random() * 15;
+            if (progress > 90) progress = 90;
+            fill.style.width = `${progress}%`;
+        }, 500);
+        bar._progressInterval = interval;
+    }
+}
+
+function hideProcessing() {
+    const bar = document.getElementById('kesatria-processing');
+    const fill = document.getElementById('kesatria-progress-bar');
+    
+    if (bar && bar._progressInterval) {
+        clearInterval(bar._progressInterval);
+    }
+    if (fill) fill.style.width = '100%';
+    
+    setTimeout(() => {
+        if (bar) bar.style.display = 'none';
+        if (fill) fill.style.width = '0%';
+    }, 500);
+}
+
+// ─── Bridge Connection ──────────────────────────
 async function registerSession() {
     const settings = extension_settings.kesatria;
     if (!settings?.bridgeUrl) return;
@@ -130,14 +255,9 @@ async function registerSession() {
     }
 }
 
-/**
- * Poll bridge server for pending requests
- */
 async function pollBridge() {
     const settings = extension_settings.kesatria;
-    if (!settings?.enabled || !settings?.bridgeUrl || bridgeState.isProcessing) {
-        return;
-    }
+    if (!settings?.enabled || !settings?.bridgeUrl || bridgeState.isProcessing) return;
     
     try {
         const cleanUrl = settings.bridgeUrl.replace(/\/$/, '');
@@ -149,9 +269,7 @@ async function pollBridge() {
             },
         });
         
-        if (!response.ok) {
-            throw new Error(`HTTP error: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
         
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.includes('application/json')) {
@@ -160,13 +278,14 @@ async function pollBridge() {
         
         const data = await response.json();
         
-        // Update status to connected
         if (bridgeState.status !== 'connected') {
             bridgeState.status = 'connected';
+            bridgeState.connectedAt = Date.now();
             updateStatusUI();
+            updateStats();
+            addLogEntry('conn', 'Bridge connected');
         }
         
-        // Handle pending request
         if (data.has_pending_request && data.request) {
             await handleBridgeRequest(data.request);
         }
@@ -176,20 +295,25 @@ async function pollBridge() {
         
         if (bridgeState.status !== 'error') {
             bridgeState.status = 'error';
-            bridgeState.lastMessage = `Error: ${error.message}`;
+            bridgeState.lastMessage = error.message;
+            bridgeState.stats.errors++;
             updateStatusUI();
+            updateStats();
+            addLogEntry('err', `Polling error: ${error.message}`);
         }
     }
 }
 
-/**
- * Handle incoming bridge request - MAIN DISPATCHER
- */
+// ─── Request Handler ────────────────────────────
 async function handleBridgeRequest(request) {
     bridgeState.isProcessing = true;
     bridgeState.status = 'processing';
     bridgeState.lastMessage = `Processing: ${request.action || 'task'}`;
     updateStatusUI();
+    
+    const actionLabel = request.action || 'unknown';
+    addLogEntry('recv', `Request: ${actionLabel}`);
+    showProcessing(`Processing ${actionLabel}...`);
     
     try {
         let result;
@@ -198,29 +322,23 @@ async function handleBridgeRequest(request) {
             case 'send_message':
                 result = await handleSendMessage(request);
                 break;
-                
             case 'get_chat_history':
                 result = await handleGetChatHistory(request);
                 break;
-                
             case 'get_character_info':
                 result = await handleGetCharacterInfo(request);
                 break;
-                
             case 'get_chat_list':
                 result = await handleGetChatList(request);
                 break;
-                
             case 'generate':
                 result = await handleGenerate(request);
                 break;
-                
             default:
                 result = await handleGenericRequest(request);
                 break;
         }
         
-        // Send response back to bridge
         await sendBridgeResponse({
             type: 'action_response',
             session_id: extension_settings.kesatria.sessionId,
@@ -229,12 +347,13 @@ async function handleBridgeRequest(request) {
             data: result,
         });
         
-        bridgeState.lastMessage = 'Response sent successfully';
+        bridgeState.stats.received++;
+        bridgeState.lastMessage = `${actionLabel} completed`;
+        addLogEntry('send', `Response sent (${actionLabel})`);
         
     } catch (error) {
         debugLog('Error processing bridge request:', error);
         
-        // Send error response
         await sendBridgeResponse({
             type: 'action_response',
             session_id: extension_settings.kesatria.sessionId,
@@ -243,45 +362,40 @@ async function handleBridgeRequest(request) {
             data: null,
         });
         
+        bridgeState.stats.errors++;
         bridgeState.lastMessage = `Error: ${error.message}`;
+        addLogEntry('err', `Failed: ${error.message}`);
     } finally {
         bridgeState.isProcessing = false;
         bridgeState.status = 'connected';
         updateStatusUI();
+        updateStats();
+        hideProcessing();
     }
 }
 
-/**
- * Handle send_message - Send a message AS the user
- * This is the key feature: Hermes can send messages as if bang jek typed them
- */
+// ─── Action Handlers ────────────────────────────
 async function handleSendMessage(request) {
     const context = getContext();
     const message = request.payload?.message || request.payload?.text;
     
-    if (!message) {
-        throw new Error('No message provided');
-    }
+    if (!message) throw new Error('No message provided');
     
     debugLog('Sending message as user:', message.substring(0, 50) + '...');
+    addLogEntry('info', `Sending: "${message.substring(0, 40)}..."`);
     
-    // Method 1: Use the textarea + send button (most reliable)
     const textarea = document.getElementById('send_textarea');
     const sendButton = document.getElementById('send_but');
     
     if (textarea && sendButton) {
-        // Set the message
         textarea.value = message;
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        
-        // Click send
         sendButton.click();
         
-        // Wait for generation to complete
         await waitForGeneration();
-        
-        // Get the last AI response
         const lastMessage = getLastAIResponse();
+        
+        bridgeState.stats.sent++;
         
         return {
             success: true,
@@ -293,16 +407,12 @@ async function handleSendMessage(request) {
     throw new Error('Could not find send textarea or button');
 }
 
-/**
- * Handle get_chat_history - Get the current chat messages
- */
 async function handleGetChatHistory(request) {
     const context = getContext();
     const chat = context.chat || [];
     const limit = request.payload?.limit || 50;
     const offset = request.payload?.offset || 0;
     
-    // Get messages with pagination
     const messages = chat.slice(offset, offset + limit).map((msg, index) => ({
         index: offset + index,
         role: msg.is_user ? 'user' : 'assistant',
@@ -311,6 +421,8 @@ async function handleGetChatHistory(request) {
         timestamp: msg.send_date || null,
         is_system: msg.is_system || false,
     }));
+    
+    addLogEntry('info', `Chat history: ${messages.length} messages`);
     
     return {
         total_messages: chat.length,
@@ -322,11 +434,10 @@ async function handleGetChatHistory(request) {
     };
 }
 
-/**
- * Handle get_character_info - Get current character details
- */
 async function handleGetCharacterInfo(request) {
     const context = getContext();
+    
+    addLogEntry('info', `Character info: ${context.name2 || 'Unknown'}`);
     
     return {
         character: {
@@ -348,13 +459,8 @@ async function handleGetCharacterInfo(request) {
     };
 }
 
-/**
- * Handle get_chat_list - List available chats for current character
- */
 async function handleGetChatList(request) {
-    // This is limited - we can only get what's in the context
     const context = getContext();
-    
     return {
         current_chat: context.chatId || null,
         character: context.name2 || 'Unknown',
@@ -362,34 +468,21 @@ async function handleGetChatList(request) {
     };
 }
 
-/**
- * Handle generate - Generate a response with a custom prompt
- */
 async function handleGenerate(request) {
     const prompt = request.payload?.prompt || request.payload?.message;
-    
-    if (!prompt) {
-        throw new Error('No prompt provided');
-    }
+    if (!prompt) throw new Error('No prompt provided');
     
     debugLog('Generating with custom prompt:', prompt.substring(0, 50) + '...');
+    addLogEntry('info', `Generating: "${prompt.substring(0, 40)}..."`);
     
     try {
         const response = await generateQuietPrompt(prompt);
-        
-        return {
-            success: true,
-            prompt: prompt,
-            response: response,
-        };
+        return { success: true, prompt: prompt, response: response };
     } catch (error) {
         throw new Error(`Generation failed: ${error.message}`);
     }
 }
 
-/**
- * Handle generic request - Legacy support
- */
 async function handleGenericRequest(request) {
     const contextStr = JSON.stringify(request.context || {}, null, 2);
     const payloadStr = JSON.stringify(request.payload || {}, null, 2);
@@ -408,22 +501,17 @@ Provide an appropriate response.`;
 
     try {
         const response = await generateQuietPrompt(systemPrompt);
-        return {
-            success: true,
-            reply_text: response,
-        };
+        return { success: true, reply_text: response };
     } catch (error) {
         throw new Error(`Generation failed: ${error.message}`);
     }
 }
 
-/**
- * Wait for AI generation to complete
- */
+// ─── Helpers ────────────────────────────────────
 function waitForGeneration() {
     return new Promise((resolve) => {
         const checkInterval = 500;
-        let maxWait = 60000; // 60 seconds max
+        let maxWait = 60000;
         let waited = 0;
         
         const check = () => {
@@ -431,7 +519,6 @@ function waitForGeneration() {
             const isGenerating = context.generating || false;
             
             if (!isGenerating || waited >= maxWait) {
-                // Small delay to ensure message is fully written
                 setTimeout(resolve, 1000);
                 return;
             }
@@ -440,19 +527,14 @@ function waitForGeneration() {
             setTimeout(check, checkInterval);
         };
         
-        // Start checking after a small delay
         setTimeout(check, 1000);
     });
 }
 
-/**
- * Get the last AI response from chat
- */
 function getLastAIResponse() {
     const context = getContext();
     const chat = context.chat || [];
     
-    // Find last non-user message
     for (let i = chat.length - 1; i >= 0; i--) {
         if (!chat[i].is_user) {
             return {
@@ -462,13 +544,9 @@ function getLastAIResponse() {
             };
         }
     }
-    
     return null;
 }
 
-/**
- * Send response back to bridge server
- */
 async function sendBridgeResponse(payload) {
     const settings = extension_settings.kesatria;
     if (!settings?.bridgeUrl) return;
@@ -484,17 +562,13 @@ async function sendBridgeResponse(payload) {
             },
             body: JSON.stringify(payload),
         });
-        
         debugLog('Response sent to bridge');
-        
     } catch (error) {
         debugLog('Failed to send response to bridge:', error);
     }
 }
 
-/**
- * Start polling
- */
+// ─── Polling Control ────────────────────────────
 function startPolling() {
     const settings = extension_settings.kesatria;
     
@@ -504,20 +578,17 @@ function startPolling() {
     
     if (settings?.enabled && settings?.bridgeUrl) {
         debugLog('Starting polling...');
-        
-        // Register session first
         registerSession();
-        
-        // Start polling
         bridgeState.pollingTimer = setInterval(pollBridge, settings.pollingInterval || 2000);
         bridgeState.status = 'connected';
+        bridgeState.connectedAt = Date.now();
         updateStatusUI();
+        updateStats();
+        startUptimeTimer();
+        addLogEntry('conn', `Polling started: ${settings.bridgeUrl}`);
     }
 }
 
-/**
- * Stop polling
- */
 function stopPolling() {
     if (bridgeState.pollingTimer) {
         clearInterval(bridgeState.pollingTimer);
@@ -525,12 +596,13 @@ function stopPolling() {
     }
     
     bridgeState.status = 'disconnected';
+    bridgeState.connectedAt = null;
     updateStatusUI();
+    updateStats();
+    stopUptimeTimer();
+    addLogEntry('info', 'Bridge disconnected');
 }
 
-/**
- * Toggle bridge enabled state
- */
 function toggleBridge() {
     const settings = extension_settings.kesatria;
     settings.enabled = !settings.enabled;
@@ -542,85 +614,228 @@ function toggleBridge() {
     }
     
     saveSettings();
-    updateUI();
+    updateToggleUI();
 }
 
-/**
- * Update UI elements
- */
-function updateUI() {
+// ─── UI Updates ─────────────────────────────────
+function updateToggleUI() {
+    const settings = extension_settings.kesatria;
+    const btn = document.getElementById('kesatria-toggle');
+    
+    if (btn) {
+        if (settings.enabled) {
+            btn.className = 'kesatria-btn-main kesatria-btn-disable';
+            btn.innerHTML = '<span class="kesatria-btn-icon-inner">⏹</span><span>Disable Bridge</span>';
+        } else {
+            btn.className = 'kesatria-btn-main kesatria-btn-enable';
+            btn.innerHTML = '<span class="kesatria-btn-icon-inner">⚡</span><span>Enable Bridge</span>';
+        }
+    }
+}
+
+function updateFormUI() {
     const settings = extension_settings.kesatria;
     
-    // Update toggle button
-    const toggleBtn = document.getElementById('kesatria-toggle');
-    if (toggleBtn) {
-        toggleBtn.textContent = settings.enabled ? 'Disable' : 'Enable';
-        toggleBtn.className = `menu_button ${settings.enabled ? 'danger_button' : 'success_button'}`;
-    }
-    
-    // Update settings inputs
     const urlInput = document.getElementById('kesatria-bridge-url');
-    if (urlInput) {
-        urlInput.value = settings.bridgeUrl || '';
-    }
+    if (urlInput) urlInput.value = settings.bridgeUrl || '';
     
     const sessionInput = document.getElementById('kesatria-session-id');
-    if (sessionInput) {
-        sessionInput.value = settings.sessionId || '';
-    }
+    if (sessionInput) sessionInput.value = settings.sessionId || '';
     
-    const autoConnectCheckbox = document.getElementById('kesatria-auto-connect');
-    if (autoConnectCheckbox) {
-        autoConnectCheckbox.checked = settings.autoConnect || false;
-    }
+    const autoConnect = document.getElementById('kesatria-auto-connect');
+    if (autoConnect) autoConnect.checked = settings.autoConnect || false;
     
-    const debugCheckbox = document.getElementById('kesatria-debug');
-    if (debugCheckbox) {
-        debugCheckbox.checked = settings.debugMode || false;
-    }
-    
-    // Update status
+    const debug = document.getElementById('kesatria-debug');
+    if (debug) debug.checked = settings.debugMode || false;
+}
+
+function updateUI() {
+    updateToggleUI();
+    updateFormUI();
     updateStatusUI();
+    updateStats();
+    renderLogEntries();
 }
 
-/**
- * Render settings panel
- */
-async function renderSettingsPanel() {
+// ─── Test Connection ────────────────────────────
+async function testConnection() {
+    const settings = extension_settings.kesatria;
+    const btn = document.getElementById('kesatria-test-btn');
+    
+    if (!settings?.bridgeUrl) {
+        addLogEntry('err', 'No bridge URL configured');
+        return;
+    }
+    
+    if (btn) {
+        btn.textContent = '⏳ Testing...';
+        btn.disabled = true;
+    }
+    
     try {
-        const extensionFolderPath = 'scripts/extensions/third-party/kesatria-penghubung-baja-hitam';
-        const html = await $.get(`${extensionFolderPath}/html/settings.html`);
-        return html;
+        const cleanUrl = settings.bridgeUrl.replace(/\/$/, '');
+        const response = await fetch(`${cleanUrl}/health`, {
+            headers: {
+                'Accept': 'application/json',
+                'ngrok-skip-browser-warning': 'true',
+                'Bypass-Tunnel-Reminder': 'true',
+            },
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            addLogEntry('conn', `Connection OK — ${data.sessions || 0} sessions active`);
+        } else {
+            addLogEntry('err', `Connection failed: HTTP ${response.status}`);
+        }
     } catch (error) {
-        debugLog('Failed to render settings template:', error);
-        return '';
+        addLogEntry('err', `Connection failed: ${error.message}`);
+    } finally {
+        if (btn) {
+            btn.textContent = '⚡ Test';
+            btn.disabled = false;
+        }
     }
 }
 
-/**
- * Initialize extension
- */
+// ─── Quick Actions ──────────────────────────────
+function setupQuickActions() {
+    // Quick action buttons
+    document.querySelectorAll('.kesatria-quick-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const action = btn.dataset.action;
+            
+            if (action === 'send_message') {
+                const sendInput = document.getElementById('kesatria-send-input');
+                if (sendInput) {
+                    sendInput.style.display = sendInput.style.display === 'none' ? 'block' : 'none';
+                }
+                return;
+            }
+            
+            if (!extension_settings.kesatria?.enabled) {
+                addLogEntry('err', 'Bridge not enabled');
+                return;
+            }
+            
+            addLogEntry('info', `Quick action: ${action}`);
+            showProcessing(`Running ${action}...`);
+            
+            try {
+                const cleanUrl = extension_settings.kesatria.bridgeUrl.replace(/\/$/, '');
+                const response = await fetch(`${cleanUrl}/submit`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: extension_settings.kesatria.sessionId,
+                        action: action,
+                        payload: action === 'get_chat_history' ? { limit: 10 } : {},
+                    }),
+                });
+                
+                if (response.ok) {
+                    addLogEntry('send', `${action} submitted`);
+                } else {
+                    addLogEntry('err', `Submit failed: HTTP ${response.status}`);
+                }
+            } catch (error) {
+                addLogEntry('err', `Submit failed: ${error.message}`);
+            } finally {
+                hideProcessing();
+            }
+        });
+    });
+    
+    // Send message confirm
+    document.getElementById('kesatria-send-confirm')?.addEventListener('click', async () => {
+        const textArea = document.getElementById('kesatria-send-text');
+        const message = textArea?.value?.trim();
+        
+        if (!message) {
+            addLogEntry('err', 'No message to send');
+            return;
+        }
+        
+        if (!extension_settings.kesatria?.enabled) {
+            addLogEntry('err', 'Bridge not enabled');
+            return;
+        }
+        
+        addLogEntry('info', `Sending: "${message.substring(0, 40)}..."`);
+        showProcessing('Sending message...');
+        
+        try {
+            const cleanUrl = extension_settings.kesatria.bridgeUrl.replace(/\/$/, '');
+            const response = await fetch(`${cleanUrl}/submit`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: extension_settings.kesatria.sessionId,
+                    action: 'send_message',
+                    payload: { message: message },
+                }),
+            });
+            
+            if (response.ok) {
+                addLogEntry('send', 'Message submitted');
+                textArea.value = '';
+                document.getElementById('kesatria-send-input').style.display = 'none';
+            } else {
+                addLogEntry('err', `Submit failed: HTTP ${response.status}`);
+            }
+        } catch (error) {
+            addLogEntry('err', `Submit failed: ${error.message}`);
+        } finally {
+            hideProcessing();
+        }
+    });
+    
+    // Send message cancel
+    document.getElementById('kesatria-send-cancel')?.addEventListener('click', () => {
+        document.getElementById('kesatria-send-input').style.display = 'none';
+    });
+}
+
+// ─── Collapsible Sections ───────────────────────
+function setupCollapsibles() {
+    document.querySelectorAll('.kesatria-collapsible').forEach(title => {
+        title.addEventListener('click', () => {
+            const section = title.closest('.kesatria-section');
+            const panel = section?.querySelector('[id$="-panel"]');
+            const chevron = title.querySelector('.kesatria-chevron');
+            
+            if (panel) {
+                const isHidden = panel.style.display === 'none';
+                panel.style.display = isHidden ? 'block' : 'none';
+                if (chevron) chevron.classList.toggle('kesatria-chevron-up', isHidden);
+            }
+        });
+    });
+}
+
+// ─── Initialize ─────────────────────────────────
 jQuery(async () => {
-    // Load settings
     loadSettings();
     
     // Load HTML template
     const settingsHtml = await renderSettingsPanel();
-    
-    // Add settings to extensions panel
     const settingsContainer = document.getElementById('extensions_settings');
     if (settingsContainer) {
         settingsContainer.insertAdjacentHTML('beforeend', settingsHtml);
     }
     
-    // Setup event listeners
+    // ─── Event Listeners ───
     document.getElementById('kesatria-toggle')?.addEventListener('click', toggleBridge);
     
     document.getElementById('kesatria-bridge-url')?.addEventListener('change', (e) => {
         extension_settings.kesatria.bridgeUrl = e.target.value;
         saveSettings();
-        
-        // Restart polling if enabled
         if (extension_settings.kesatria.enabled) {
             stopPolling();
             startPolling();
@@ -649,13 +864,48 @@ jQuery(async () => {
         }
     });
     
+    document.getElementById('kesatria-test-btn')?.addEventListener('click', testConnection);
+    
+    document.getElementById('kesatria-copy-session')?.addEventListener('click', () => {
+        const sessionInput = document.getElementById('kesatria-session-id');
+        if (sessionInput) {
+            navigator.clipboard.writeText(sessionInput.value).then(() => {
+                addLogEntry('info', 'Session ID copied to clipboard');
+            }).catch(() => {
+                sessionInput.select();
+                document.execCommand('copy');
+                addLogEntry('info', 'Session ID copied');
+            });
+        }
+    });
+    
+    document.getElementById('kesatria-log-clear')?.addEventListener('click', clearLog);
+    
+    // Setup collapsible sections
+    setupCollapsibles();
+    
+    // Setup quick actions
+    setupQuickActions();
+    
     // Auto-connect if enabled
     if (extension_settings.kesatria.autoConnect && extension_settings.kesatria.enabled) {
         startPolling();
     }
     
-    // Update UI
+    // Initial UI update
     updateUI();
     
-    console.log('[⚔️ Kesatria] Extension loaded successfully - Ready for Hermes bridge');
+    console.log('[⚔️ Kesatria] Extension loaded successfully - Warrior Command Center ready');
 });
+
+// ─── Render Settings Panel ──────────────────────
+async function renderSettingsPanel() {
+    try {
+        const extensionFolderPath = 'scripts/extensions/third-party/kesatria-penghubung-baja-hitam';
+        const html = await $.get(`${extensionFolderPath}/html/settings.html`);
+        return html;
+    } catch (error) {
+        debugLog('Failed to render settings template:', error);
+        return '';
+    }
+}
