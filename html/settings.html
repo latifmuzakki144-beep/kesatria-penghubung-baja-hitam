@@ -1,152 +1,274 @@
 <div id="kesatria-settings">
+    <!-- ═══ AMBIENT BACKGROUND ═══ -->
+    <div class="kesatria-ambient">
+        <div class="kesatria-particle p1"></div>
+        <div class="kesatria-particle p2"></div>
+        <div class="kesatria-particle p3"></div>
+        <div class="kesatria-particle p4"></div>
+        <div class="kesatria-particle p5"></div>
+    </div>
+
     <!-- ═══ HEADER ═══ -->
     <div class="kesatria-header">
         <div class="kesatria-header-left">
-            <div class="kesatria-emblem">⚔️</div>
+            <div class="kesatria-emblem-container">
+                <div class="kesatria-emblem-glow"></div>
+                <div class="kesatria-emblem">⚔️</div>
+            </div>
             <div class="kesatria-header-text">
                 <h3>Kesatria Penghubung Baja Hitam</h3>
                 <span class="kesatria-subtitle">Bridge to Hermes</span>
             </div>
         </div>
         <div class="kesatria-header-right">
-            <span id="kesatria-version" class="kesatria-badge">v1.0.0</span>
+            <div class="kesatria-health-indicator">
+                <div id="kesatria-health-bar" class="kesatria-health-bar">
+                    <div class="kesatria-health-fill"></div>
+                </div>
+                <span id="kesatria-health-text" class="kesatria-health-text">STABLE</span>
+            </div>
+            <span id="kesatria-version" class="kesatria-badge">v2.1.0</span>
         </div>
     </div>
 
     <!-- ═══ STATUS BAR ═══ -->
     <div class="kesatria-status-bar">
         <div class="kesatria-status-left">
-            <div id="kesatria-status-dot" class="kesatria-dot kesatria-dot-off"></div>
+            <div class="kesatria-status-ring">
+                <div id="kesatria-status-dot" class="kesatria-dot kesatria-dot-off"></div>
+                <svg class="kesatria-ring-svg" viewBox="0 0 36 36">
+                    <path class="kesatria-ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                    <path id="kesatria-ring-fill" class="kesatria-ring-fill" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                </svg>
+            </div>
             <div class="kesatria-status-info">
                 <span id="kesatria-status-text" class="kesatria-status-label">OFFLINE</span>
                 <span id="kesatria-status-detail" class="kesatria-status-detail"></span>
             </div>
         </div>
         <div class="kesatria-status-right">
+            <div class="kesatria-latency">
+                <span class="kesatria-latency-icon">⚡</span>
+                <span id="kesatria-latency-value" class="kesatria-latency-value">--ms</span>
+            </div>
             <button id="kesatria-reconnect" class="kesatria-btn-icon" title="Reconnect">↻</button>
         </div>
     </div>
 
     <!-- ═══ PROCESSING BAR ═══ -->
     <div id="kesatria-processing" class="kesatria-processing" style="display:none;">
-        <div class="kesatria-processing-inner">
-            <div class="kesatria-spinner"></div>
-            <span id="kesatria-processing-text">Processing...</span>
+        <div class="kesatria-processing-header">
+            <div class="kesatria-processing-left">
+                <div class="kesatria-spinner"></div>
+                <span id="kesatria-processing-text">Processing...</span>
+            </div>
+            <span id="kesatria-processing-time" class="kesatria-processing-time">0s</span>
         </div>
         <div class="kesatria-progress-track">
             <div id="kesatria-progress-bar" class="kesatria-progress-fill"></div>
+            <div class="kesatria-progress-glow"></div>
+        </div>
+        <div id="kesatria-processing-steps" class="kesatria-processing-steps">
+            <div class="kesatria-step kesa-step-done"><span class="kesa-step-icon">✓</span> Submit</div>
+            <div class="kesatria-step"><span class="kesa-step-icon">◌</span> Processing</div>
+            <div class="kesatria-step"><span class="kesa-step-icon">◌</span> Response</div>
         </div>
     </div>
 
-    <!-- ═══ CONNECTION SECTION ═══ -->
-    <div class="kesatria-section">
-        <div class="kesatria-section-title">
-            <span class="kesatria-section-icon">🌐</span>
-            <span>Connection</span>
-        </div>
-        
-        <div class="kesatria-field">
-            <label for="kesatria-bridge-url">Bridge Server URL</label>
-            <div class="kesatria-input-row">
-                <input 
-                    type="url" 
-                    id="kesatria-bridge-url" 
-                    placeholder="https://your-bridge.trycloudflare.com"
-                    autocomplete="off"
-                    spellcheck="false"
-                />
-                <button id="kesatria-test-btn" class="kesatria-btn-sm" title="Test Connection">
-                    ⚡ Test
-                </button>
-            </div>
-        </div>
-
-        <div class="kesatria-field">
-            <label for="kesatria-session-id">Session ID</label>
-            <div class="kesatria-input-row">
-                <input 
-                    type="text" 
-                    id="kesatria-session-id" 
-                    placeholder="auto-generated"
-                    readonly
-                />
-                <button id="kesatria-copy-session" class="kesatria-btn-sm" title="Copy Session ID">
-                    📋
-                </button>
-            </div>
-        </div>
-
-        <div class="kesatria-toggles">
-            <label class="kesatria-toggle-row">
-                <input type="checkbox" id="kesatria-auto-connect" />
-                <span class="kesatria-toggle-label">Auto-connect on startup</span>
-            </label>
-            <label class="kesatria-toggle-row">
-                <input type="checkbox" id="kesatria-debug" />
-                <span class="kesatria-toggle-label">Debug logging</span>
-            </label>
-        </div>
-    </div>
-
-    <!-- ═══ CONTROL ═══ -->
-    <div class="kesatria-control">
-        <button id="kesatria-toggle" class="kesatria-btn-main kesatria-btn-enable">
-            <span class="kesatria-btn-icon-inner">⚡</span>
-            <span>Enable Bridge</span>
+    <!-- ═══ TABS NAVIGATION ═══ -->
+    <div class="kesatria-tabs">
+        <button class="kesatria-tab kesa-tab-active" data-tab="connection">
+            <span class="kesa-tab-icon">🌐</span>
+            <span class="kesa-tab-label">Connection</span>
+        </button>
+        <button class="kesatria-tab" data-tab="actions">
+            <span class="kesa-tab-icon">⚡</span>
+            <span class="kesa-tab-label">Actions</span>
+        </button>
+        <button class="kesatria-tab" data-tab="logs">
+            <span class="kesa-tab-icon">📜</span>
+            <span class="kesa-tab-label">Logs</span>
+            <span id="kesatria-log-badge" class="kesa-tab-badge">0</span>
+        </button>
+        <button class="kesatria-tab" data-tab="character">
+            <span class="kesa-tab-icon">👤</span>
+            <span class="kesa-tab-label">Character</span>
         </button>
     </div>
 
-    <!-- ═══ ACTIVITY LOG ═══ -->
-    <div class="kesatria-section">
-        <div class="kesatria-section-title kesatria-collapsible" id="kesatria-log-toggle">
-            <span class="kesatria-section-icon">📜</span>
-            <span>Activity Log</span>
-            <span id="kesatria-log-count" class="kesatria-badge-sm">0</span>
-            <span class="kesatria-chevron">▼</span>
-        </div>
-        <div id="kesatria-log-panel" class="kesatria-log-panel">
-            <div id="kesatria-log-entries" class="kesatria-log-entries">
-                <div class="kesatria-log-empty">No activity yet</div>
+    <!-- ═══ TAB CONTENT: CONNECTION ═══ -->
+    <div id="kesa-tab-connection" class="kesatria-tab-content kesa-tab-show">
+        <div class="kesatria-section">
+            <div class="kesatria-field">
+                <label for="kesatria-bridge-url">Bridge Server URL</label>
+                <div class="kesatria-input-row">
+                    <input 
+                        type="url" 
+                        id="kesatria-bridge-url" 
+                        placeholder="https://your-bridge.trycloudflare.com"
+                        autocomplete="off"
+                        spellcheck="false"
+                    />
+                    <button id="kesatria-test-btn" class="kesatria-btn-sm" title="Test Connection">
+                        ⚡ Test
+                    </button>
+                </div>
             </div>
-            <div class="kesatria-log-footer">
-                <button id="kesatria-log-clear" class="kesatria-btn-text">Clear</button>
+
+            <div class="kesatria-field">
+                <label for="kesatria-session-id">Session ID</label>
+                <div class="kesatria-input-row">
+                    <input 
+                        type="text" 
+                        id="kesatria-session-id" 
+                        placeholder="auto-generated"
+                        readonly
+                    />
+                    <button id="kesatria-copy-session" class="kesatria-btn-sm" title="Copy Session ID">
+                        📋
+                    </button>
+                </div>
+            </div>
+
+            <div class="kesatria-toggles">
+                <label class="kesatria-toggle-row">
+                    <div class="kesatria-switch">
+                        <input type="checkbox" id="kesatria-auto-connect" />
+                        <span class="kesatria-slider"></span>
+                    </div>
+                    <span class="kesatria-toggle-label">Auto-connect on startup</span>
+                </label>
+                <label class="kesatria-toggle-row">
+                    <div class="kesatria-switch">
+                        <input type="checkbox" id="kesatria-debug" />
+                        <span class="kesatria-slider"></span>
+                    </div>
+                    <span class="kesatria-toggle-label">Debug logging</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="kesatria-control">
+            <button id="kesatria-toggle" class="kesatria-btn-main kesatria-btn-enable">
+                <span class="kesatria-btn-ripple"></span>
+                <span class="kesatria-btn-icon-inner">⚡</span>
+                <span>Enable Bridge</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══ TAB CONTENT: ACTIONS ═══ -->
+    <div id="kesa-tab-actions" class="kesatria-tab-content">
+        <div class="kesatria-quick-grid">
+            <button class="kesatria-quick-btn" data-action="send_message">
+                <div class="kesatria-quick-icon-wrap">
+                    <span class="kesatria-quick-icon">📤</span>
+                </div>
+                <div class="kesatria-quick-info">
+                    <span class="kesatria-quick-label">Send Message</span>
+                    <span class="kesatria-quick-desc">Send as user to character</span>
+                </div>
+            </button>
+            <button class="kesatria-quick-btn" data-action="get_chat_history">
+                <div class="kesatria-quick-icon-wrap">
+                    <span class="kesatria-quick-icon">📖</span>
+                </div>
+                <div class="kesatria-quick-info">
+                    <span class="kesatria-quick-label">Chat History</span>
+                    <span class="kesatria-quick-desc">Fetch recent messages</span>
+                </div>
+            </button>
+            <button class="kesatria-quick-btn" data-action="get_character_info">
+                <div class="kesatria-quick-icon-wrap">
+                    <span class="kesatria-quick-icon">👤</span>
+                </div>
+                <div class="kesatria-quick-info">
+                    <span class="kesatria-quick-label">Character Info</span>
+                    <span class="kesatria-quick-desc">Get active character data</span>
+                </div>
+            </button>
+            <button class="kesatria-quick-btn" data-action="generate">
+                <div class="kesatria-quick-icon-wrap">
+                    <span class="kesatria-quick-icon">🤖</span>
+                </div>
+                <div class="kesatria-quick-info">
+                    <span class="kesatria-quick-label">Generate</span>
+                    <span class="kesatria-quick-desc">Generate with custom prompt</span>
+                </div>
+            </button>
+        </div>
+
+        <!-- Send Message Composer -->
+        <div id="kesatria-send-composer" class="kesatria-composer" style="display:none;">
+            <div class="kesatria-composer-header">
+                <span class="kesatria-composer-title">📤 Send as User</span>
+                <button id="kesatria-composer-close" class="kesatria-btn-icon-sm">✕</button>
+            </div>
+            <textarea id="kesatria-send-text" placeholder="Type message to send as user..." rows="4"></textarea>
+            <div class="kesatria-composer-footer">
+                <div class="kesatria-char-count">
+                    <span id="kesatria-char-count">0</span> chars
+                </div>
+                <div class="kesatria-composer-actions">
+                    <button id="kesatria-send-cancel" class="kesatria-btn-sm">Cancel</button>
+                    <button id="kesatria-send-confirm" class="kesatria-btn-sm kesatria-btn-primary">
+                        Send ➤
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Generate Composer -->
+        <div id="kesatria-generate-composer" class="kesatria-composer" style="display:none;">
+            <div class="kesatria-composer-header">
+                <span class="kesatria-composer-title">🤖 Generate Response</span>
+                <button id="kesatria-generate-close" class="kesatria-btn-icon-sm">✕</button>
+            </div>
+            <textarea id="kesatria-generate-text" placeholder="Enter custom prompt for generation..." rows="4"></textarea>
+            <div class="kesatria-composer-footer">
+                <div class="kesatria-char-count">
+                    <span id="kesatria-generate-char-count">0</span> chars
+                </div>
+                <div class="kesatria-composer-actions">
+                    <button id="kesatria-generate-cancel" class="kesatria-btn-sm">Cancel</button>
+                    <button id="kesatria-generate-confirm" class="kesatria-btn-sm kesatria-btn-primary">
+                        Generate ⚡
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- ═══ QUICK ACTIONS ═══ -->
-    <div class="kesatria-section">
-        <div class="kesatria-section-title kesatria-collapsible" id="kesatria-quick-toggle">
-            <span class="kesatria-section-icon">⚡</span>
-            <span>Quick Actions</span>
-            <span class="kesatria-chevron">▼</span>
-        </div>
-        <div id="kesatria-quick-panel" class="kesatria-quick-panel">
-            <div class="kesatria-quick-grid">
-                <button id="kesatria-act-history" class="kesatria-quick-btn" data-action="get_chat_history">
-                    <span class="kesatria-quick-icon">📖</span>
-                    <span class="kesatria-quick-label">Chat History</span>
-                </button>
-                <button id="kesatria-act-charinfo" class="kesatria-quick-btn" data-action="get_character_info">
-                    <span class="kesatria-quick-icon">👤</span>
-                    <span class="kesatria-quick-label">Character Info</span>
-                </button>
-                <button id="kesatria-act-send" class="kesatria-quick-btn" data-action="send_message">
-                    <span class="kesatria-quick-icon">📤</span>
-                    <span class="kesatria-quick-label">Send Message</span>
-                </button>
-                <button id="kesatria-act-generate" class="kesatria-quick-btn" data-action="generate">
-                    <span class="kesatria-quick-icon">🤖</span>
-                    <span class="kesatria-quick-label">Generate</span>
-                </button>
+    <!-- ═══ TAB CONTENT: LOGS ═══ -->
+    <div id="kesa-tab-logs" class="kesatria-tab-content">
+        <div class="kesatria-log-toolbar">
+            <div class="kesatria-log-filters">
+                <button class="kesatria-filter-btn kesa-filter-active" data-filter="all">All</button>
+                <button class="kesatria-filter-btn" data-filter="send">Sent</button>
+                <button class="kesatria-filter-btn" data-filter="recv">Received</button>
+                <button class="kesatria-filter-btn" data-filter="err">Errors</button>
+                <button class="kesatria-filter-btn" data-filter="info">Info</button>
             </div>
-            <!-- Send Message Input (hidden by default) -->
-            <div id="kesatria-send-input" class="kesatria-send-input" style="display:none;">
-                <textarea id="kesatria-send-text" placeholder="Type message to send as user..." rows="3"></textarea>
-                <div class="kesatria-send-actions">
-                    <button id="kesatria-send-cancel" class="kesatria-btn-sm">Cancel</button>
-                    <button id="kesatria-send-confirm" class="kesatria-btn-sm kesatria-btn-primary">Send ➤</button>
-                </div>
+            <div class="kesatria-log-actions">
+                <button id="kesatria-log-pause" class="kesatria-btn-icon-sm" title="Pause">⏸</button>
+                <button id="kesatria-log-clear" class="kesatria-btn-icon-sm" title="Clear">🗑</button>
+            </div>
+        </div>
+        <div id="kesatria-log-entries" class="kesatria-log-entries">
+            <div class="kesatria-log-empty">
+                <div class="kesatria-log-empty-icon">📜</div>
+                <div class="kesatria-log-empty-text">No activity yet</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ TAB CONTENT: CHARACTER ═══ -->
+    <div id="kesa-tab-character" class="kesatria-tab-content">
+        <div id="kesatria-char-panel" class="kesatria-char-panel">
+            <div class="kesatria-char-empty">
+                <div class="kesatria-char-empty-icon">👤</div>
+                <div class="kesatria-char-empty-text">No character loaded</div>
+                <button id="kesatria-refresh-char" class="kesatria-btn-sm">Refresh</button>
             </div>
         </div>
     </div>
@@ -154,18 +276,22 @@
     <!-- ═══ STATS ═══ -->
     <div class="kesatria-stats">
         <div class="kesatria-stat">
+            <div class="kesatria-stat-icon">📤</div>
             <span class="kesatria-stat-value" id="kesatria-stat-sent">0</span>
             <span class="kesatria-stat-label">Sent</span>
         </div>
         <div class="kesatria-stat">
+            <div class="kesatria-stat-icon">📥</div>
             <span class="kesatria-stat-value" id="kesatria-stat-received">0</span>
             <span class="kesatria-stat-label">Received</span>
         </div>
         <div class="kesatria-stat">
+            <div class="kesatria-stat-icon">❌</div>
             <span class="kesatria-stat-value" id="kesatria-stat-errors">0</span>
             <span class="kesatria-stat-label">Errors</span>
         </div>
         <div class="kesatria-stat">
+            <div class="kesatria-stat-icon">⏱</div>
             <span class="kesatria-stat-value" id="kesatria-stat-uptime">--</span>
             <span class="kesatria-stat-label">Uptime</span>
         </div>
@@ -173,8 +299,13 @@
 
     <!-- ═══ FOOTER ═══ -->
     <div class="kesatria-footer">
-        <span>⚔️ Kesatria Penghubung Baja Hitam</span>
-        <span class="kesatria-footer-sep">·</span>
-        <span>by latifmuzakki144-beep</span>
+        <div class="kesatria-footer-left">
+            <span>⚔️ Kesatria</span>
+            <span class="kesatria-footer-sep">·</span>
+            <span>by latifmuzakki144-beep</span>
+        </div>
+        <div class="kesatria-footer-right">
+            <span id="kesatria-poll-count" class="kesatria-poll-count">0 polls</span>
+        </div>
     </div>
 </div>
