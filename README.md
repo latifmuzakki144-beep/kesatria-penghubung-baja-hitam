@@ -88,6 +88,25 @@ Enable debug mode in the extension settings to see detailed logs in the browser 
 
 ## 📝 Changelog
 
+### v2.1.0
+- Warrior Command Center UI redesign with full animations
+- Complex layout with tabs system (Status, Activity, Character, Settings)
+- Ambient particle effects & health indicator
+- Activity log with filters (all/conn/send/recv/err/info) and pause/clear
+- Processing bar with multi-step progress animation & timer
+- Latency monitor & uptime tracker
+- Stats dashboard (sent / received / errors / polls)
+- Character tab with avatar, personality, scenario preview
+- Quick actions: send message, generate, get chat history
+- Message & generate composers with character counters
+
+### v2.0.0
+- Warrior Command Center UI redesign
+- Hermes can now send messages AS user
+- Get chat history endpoint
+- Get character info endpoint
+- Tabbed settings panel
+
 ### v1.0.0
 - Initial release
 - Basic bridge functionality
