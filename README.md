@@ -1,131 +1,170 @@
 # ⚔️ Kesatria Penghubung Baja Hitam
 
-**SillyTavern Extension - OpenClaw Bridge**
+**Local-first SillyTavern Command Center with an optional Hermes/OpenClaw bridge.**
 
-Connect your SillyTavern to Termux/OpenClaw via a bridge server.
+Kesatria v3 turns the extension from a bridge monitor into a command layer for SillyTavern. Commands started inside SillyTavern run locally and no longer travel to the bridge and back. Hermes/OpenClaw can still use the same action system remotely when bridge mode is enabled.
 
-## 🎯 Features
+## Highlights in v3.0.0
 
-- ✅ Enable/Disable toggle from SillyTavern UI
-- ✅ Real-time connection status indicator
-- ✅ Configurable bridge URL
-- ✅ Auto-connect on startup option
-- ✅ Debug logging
-- ✅ Seamless integration with SillyTavern
+- Local-first commands that work without Hermes, OpenClaw, or a bridge server
+- Shared Action Registry for local and remote capabilities
+- Serialized Action Queue with status, cancellation, timeout, and history
+- Hybrid, Local-only, and Bridge-only operating modes
+- Remote permission scopes for read, write, generation, and save actions
+- Bearer-token support for bridge requests
+- Request deduplication and structured action responses
+- Exponential reconnect backoff instead of a fixed failing poll loop
+- Modern floating Command Center with desktop and mobile layouts
+- Draggable launcher with persistent position
+- Searchable command palette (`Ctrl/Command + K`)
+- Activity audit trail and JSON result viewer
+- Reduced-motion accessibility option
+- Compatibility mapping for the original bridge action names
 
-## 📦 Installation
+## Architecture
 
-### From GitHub (Recommended)
+```text
+SillyTavern UI ──► Action Registry ──► Action Queue ──► SillyTavern Adapter
+                         ▲                    ▲
+                         │                    │
+Hermes / OpenClaw ─► Bridge Client ──────────┘
+```
 
-1. Open SillyTavern
-2. Go to **Extensions** panel
-3. Click **Install Extension**
-4. Paste this URL:
-   ```
-   https://github.com/latifmuzakki144-beep/kesatria-penghubung-baja-hitam
-   ```
-5. Click **Install**
+Local and remote requests use the same registered actions, permissions, timeout rules, queue, and result format.
 
-### Manual Installation
+## Available actions
 
-1. Clone this repository:
-   ```bash
-   cd /path/to/SillyTavern/data/default-user/extensions/
-   git clone https://github.com/latifmuzakki144-beep/kesatria-penghubung-baja-hitam.git
-   ```
-2. Restart SillyTavern
+| Action ID | Legacy bridge name | Description |
+|---|---|---|
+| `system.status` | `get_status`, `get_chat_list` | Read extension, chat, queue, and bridge status |
+| `character.info` | `get_character_info` | Read the active character and persona |
+| `chat.history` | `get_chat_history` | Read paginated chat history |
+| `chat.last_response` | `get_last_response` | Read the newest assistant response |
+| `chat.send_as_user` | `send_message` | Send directly through the SillyTavern composer |
+| `generation.quiet` | `generate` | Run a private quiet prompt |
+| `generation.continue` | `continue` | Trigger native continue generation |
+| `generation.regenerate` | `regenerate` | Trigger native regenerate |
+| `generation.stop` | `stop_generation` | Stop an active generation |
+| `chat.save` | `save_chat` | Persist the active chat |
+| `chat.reload` | — | Reload the active chat locally |
 
-## ⚙️ Configuration
+The availability of native continue/regenerate/stop controls depends on the installed SillyTavern version. Kesatria reports a clear error when a matching native control is unavailable.
 
-### Extension Settings
+## Installation
 
-| Setting | Description | Default |
-|---------|-------------|---------|
-| **Bridge URL** | URL of the bridge server | *(empty)* |
-| **Session ID** | Unique session identifier | Auto-generated |
-| **Auto-connect** | Connect automatically on startup | `false` |
-| **Debug Mode** | Enable debug logging | `false` |
+1. Open SillyTavern.
+2. Open **Extensions**.
+3. Choose **Install Extension**.
+4. Paste:
 
-### Bridge Server
+```text
+https://github.com/latifmuzakki144-beep/kesatria-penghubung-baja-hitam
+```
 
-The bridge server is a separate Node.js application that:
-1. Receives requests from Termux/OpenClaw
-2. Forwards them to SillyTavern
-3. Returns responses back to Termux/OpenClaw
+5. Refresh SillyTavern.
+6. Open the floating sword button or the extension settings entry.
 
-See [openclaw-bridge-server](https://github.com/latifmuzakki144-beep/openclaw-bridge-server) for the bridge server setup.
+## Operating modes
 
-## 🚀 Usage
+### Local only
 
-1. **Start the bridge server** on your Termux/OpenClaw
-2. **Get the bridge URL** (e.g., from Cloudflare tunnel)
-3. **Open SillyTavern** and go to Extensions
-4. **Enter the bridge URL** in the settings
-5. **Click Enable** to connect
+Commands can be started from SillyTavern. The bridge cannot connect and remote requests are rejected.
 
-### Status Indicators
+### Hybrid
 
-| Status | Color | Meaning |
-|--------|-------|---------|
-| 🟢 Connected | Green | Bridge is connected and ready |
-| 🟡 Processing | Yellow | Processing a request |
-| 🔴 Error | Red | Connection error |
-| ⚫ Disconnected | Gray | Not connected |
+Local commands run directly while Hermes/OpenClaw can submit permitted remote commands. This is the recommended mode.
 
-## 🔧 API Endpoints
+### Bridge only
 
-The extension communicates with the bridge server using these endpoints:
+The extension is controlled through the bridge. Local command execution is disabled by policy.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/register` | POST | Register a session |
-| `/poll` | GET | Poll for pending requests |
-| `/response` | POST | Send response back |
+## Bridge setup
 
-## 🐛 Debugging
+Configure these values in **Connection**:
 
-Enable debug mode in the extension settings to see detailed logs in the browser console.
+- **Bridge URL** — base URL of the bridge server
+- **Authentication Token** — optional Bearer token
+- **Session ID** — generated with `crypto.randomUUID()` when available
+- **Polling interval** — minimum 750 ms
+- **Mode** — Local, Hybrid, or Bridge
 
-## 📝 Changelog
+The v3 registration payload includes protocol and capability information:
 
-### v2.1.0
-- Warrior Command Center UI redesign with full animations
-- Complex layout with tabs system (Status, Activity, Character, Settings)
-- Ambient particle effects & health indicator
-- Activity log with filters (all/conn/send/recv/err/info) and pause/clear
-- Processing bar with multi-step progress animation & timer
-- Latency monitor & uptime tracker
-- Stats dashboard (sent / received / errors / polls)
-- Character tab with avatar, personality, scenario preview
-- Quick actions: send message, generate, get chat history
-- Message & generate composers with character counters
+```json
+{
+  "protocol": "kesatria/3",
+  "client": "sillytavern-extension",
+  "mode": "hybrid",
+  "capabilities": ["system.status", "chat.history", "chat.send_as_user"]
+}
+```
 
-### v2.0.0
-- Warrior Command Center UI redesign
-- Hermes can now send messages AS user
-- Get chat history endpoint
-- Get character info endpoint
-- Tabbed settings panel
+Existing bridge servers can continue sending the original action names. The extension maps those names to the v3 registry.
 
-### v1.0.0
-- Initial release
-- Basic bridge functionality
-- UI with status indicator
-- Settings panel
+## Remote permissions
 
-## 🤝 Contributing
+Remote permissions are independent from local commands:
 
-Feel free to submit issues and pull requests!
+- `system.read`
+- `chat.read`
+- `character.read`
+- `chat.write`
+- `generation.run`
+- `generation.stop`
+- `system.save`
 
-## 📄 License
+Disabling a scope rejects matching remote requests before they reach SillyTavern.
 
-MIT License - See [LICENSE](LICENSE) for details.
+## Project structure
 
-## 🙏 Credits
+```text
+index.js
+style.css
+html/settings.html
+src/
+├── adapters/
+│   ├── bridge-client.js
+│   └── sillytavern-adapter.js
+└── core/
+    ├── action-queue.js
+    ├── action-registry.js
+    └── state-store.js
+```
 
-- **Author:** latifmuzakki144-beep
-- **Inspired by:** GeminiRP Bridge Manager
+## Bridge endpoints
 
----
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/register` | POST | Register the session and capabilities |
+| `/poll` | GET | Retrieve a pending action |
+| `/response` | POST | Return a structured action result |
+| `/health` | GET | Test bridge availability |
 
-⚔️ **Kesatria Penghubung Baja Hitam** - The Black Steel Connecting Knight
+## Development notes
+
+The extension has no build step. JavaScript files are native ES modules loaded by SillyTavern.
+
+Basic syntax validation:
+
+```bash
+node --check index.js
+node --check src/core/action-registry.js
+node --check src/core/action-queue.js
+node --check src/core/state-store.js
+node --check src/adapters/bridge-client.js
+node --check src/adapters/sillytavern-adapter.js
+```
+
+## Roadmap after v3.0
+
+- WebSocket/SSE transport with polling fallback
+- Confirmation policies for sensitive remote actions
+- Per-character and group profiles
+- Macros and multi-step workflows
+- Chat search and context inspector
+- Device pairing and revocation
+- Additional tested SillyTavern actions
+
+## License
+
+MIT License. See [LICENSE](LICENSE).

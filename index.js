@@ -1,871 +1,933 @@
 /**
- * ⚔️ Kesatria Penghubung Baja Hitam v2.1
- * SillyTavern Extension - Warrior Command Center
+ * ⚔️ Kesatria Penghubung Baja Hitam v3.0.0
+ * Local-first SillyTavern Command Center with optional Hermes/OpenClaw bridge.
  */
 
 import {
     eventSource,
     event_types,
     saveSettingsDebounced,
-    getRequestHeaders,
     generateQuietPrompt,
-    substituteParams,
     saveChat,
     reloadCurrentChat,
-    addOneMessage,
 } from '../../../../script.js';
 
-import {
-    extension_settings,
-    getContext,
-} from '../../../extensions.js';
+import { extension_settings, getContext } from '../../../extensions.js';
+import { ActionRegistry } from './src/core/action-registry.js';
+import { ActionQueue } from './src/core/action-queue.js';
+import { StateStore } from './src/core/state-store.js';
+import { BridgeClient } from './src/adapters/bridge-client.js';
+import { SillyTavernAdapter } from './src/adapters/sillytavern-adapter.js';
 
-// ─── Settings ───────────────────────────────────
+const EXTENSION_KEY = 'kesatria';
+const EXTENSION_NAME = 'kesatria-penghubung-baja-hitam';
+const VERSION = '3.0.0';
+const ROOT_PATH = `scripts/extensions/third-party/${EXTENSION_NAME}`;
+const MAX_ACTIVITY = 200;
+
+function createSessionId() {
+    if (globalThis.crypto?.randomUUID) return `session-${globalThis.crypto.randomUUID()}`;
+    return `session-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 const defaultSettings = {
+    schemaVersion: 3,
     enabled: false,
+    mode: 'hybrid',
     bridgeUrl: '',
-    sessionId: `session-${Math.random().toString(36).substring(2, 15)}`,
+    authToken: '',
+    sessionId: createSessionId(),
     autoConnect: false,
     pollingInterval: 2000,
     debugMode: false,
+    reducedMotion: false,
+    launcherPosition: null,
+    permissions: {
+        'system.read': true,
+        'chat.read': true,
+        'character.read': true,
+        'chat.write': true,
+        'generation.run': true,
+        'generation.stop': true,
+        'system.save': true,
+    },
 };
 
-// ─── State ──────────────────────────────────────
-let bridgeState = {
-    status: 'disconnected',
-    lastMessage: '',
-    pollingTimer: null,
-    isProcessing: false,
-    connectedAt: null,
-    stats: { sent: 0, received: 0, errors: 0 },
-    logEntries: [],
-    logFilter: 'all',
-    logPaused: false,
-    uptimeTimer: null,
-    processStartTime: null,
-    processTimer: null,
-    pollCount: 0,
-    latency: null,
-    lastPollTime: null,
-};
+const runtime = new StateStore({
+    bridge: {
+        status: 'offline',
+        latency: null,
+        lastError: '',
+        connectedAt: null,
+        pollCount: 0,
+    },
+    activity: [],
+    queue: { active: null, pending: [], history: [] },
+    activeTab: 'overview',
+});
 
-const MAX_LOG_ENTRIES = 200;
+let registry;
+let queue;
+let bridge;
+let sillyTavern;
+let pendingDialogAction = null;
+const processedRemoteRequests = new Map();
 
-// ─── Settings ───────────────────────────────────
-function loadSettings() {
-    if (!extension_settings.kesatria) {
-        extension_settings.kesatria = { ...defaultSettings };
-    }
-    for (const key of Object.keys(defaultSettings)) {
-        if (extension_settings.kesatria[key] === undefined) {
-            extension_settings.kesatria[key] = defaultSettings[key];
-        }
-    }
+function settings() {
+    return extension_settings[EXTENSION_KEY];
+}
+
+function migrateSettings() {
+    const current = extension_settings[EXTENSION_KEY] || {};
+    const migrated = {
+        ...defaultSettings,
+        ...current,
+        permissions: {
+            ...defaultSettings.permissions,
+            ...(current.permissions || {}),
+        },
+    };
+
+    if (!migrated.sessionId) migrated.sessionId = createSessionId();
+    if (!['local', 'bridge', 'hybrid'].includes(migrated.mode)) migrated.mode = 'hybrid';
+    migrated.schemaVersion = 3;
+    extension_settings[EXTENSION_KEY] = migrated;
+    saveSettingsDebounced();
 }
 
 function saveSettings() {
     saveSettingsDebounced();
 }
 
-function debugLog(...args) {
-    if (extension_settings.kesatria?.debugMode) {
-        console.log('[⚔️ Kesatria]', ...args);
-    }
+function debug(...args) {
+    if (settings()?.debugMode) console.debug('[⚔️ Kesatria v3]', ...args);
 }
 
-// ─── Tabs ───────────────────────────────────────
-function setupTabs() {
-    document.querySelectorAll('.kesatria-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            const tabName = tab.dataset.tab;
-            
-            // Update active tab
-            document.querySelectorAll('.kesatria-tab').forEach(t => t.classList.remove('kesa-tab-active'));
-            tab.classList.add('kesa-tab-active');
-            
-            // Show content
-            document.querySelectorAll('.kesatria-tab-content').forEach(c => c.classList.remove('kesa-tab-show'));
-            document.getElementById(`kesa-tab-${tabName}`)?.classList.add('kesa-tab-show');
-        });
-    });
-}
-
-// ─── Activity Log ───────────────────────────────
-function addLogEntry(type, message) {
-    if (bridgeState.logPaused) return;
-    
-    const now = new Date();
-    const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    
-    const icons = { send: '➤', recv: '◀', err: '✖', info: '●', conn: '◉' };
-    
-    const entry = { type, message, time, icon: icons[type] || '●', timestamp: Date.now() };
-    bridgeState.logEntries.unshift(entry);
-    
-    if (bridgeState.logEntries.length > MAX_LOG_ENTRIES) {
-        bridgeState.logEntries = bridgeState.logEntries.slice(0, MAX_LOG_ENTRIES);
-    }
-    
-    renderLogEntries();
-    updateLogBadge();
-}
-
-function renderLogEntries() {
-    const container = document.getElementById('kesatria-log-entries');
-    if (!container) return;
-    
-    let entries = bridgeState.logEntries;
-    if (bridgeState.logFilter !== 'all') {
-        entries = entries.filter(e => e.type === bridgeState.logFilter);
-    }
-    
-    if (entries.length === 0) {
-        container.innerHTML = `
-            <div class="kesatria-log-empty">
-                <div class="kesatria-log-empty-icon">📜</div>
-                <div class="kesatria-log-empty-text">No ${bridgeState.logFilter === 'all' ? '' : bridgeState.logFilter + ' '}activity yet</div>
-            </div>`;
-    } else {
-        container.innerHTML = entries.map(entry => `
-            <div class="kesatria-log-entry kesatria-log-${entry.type}">
-                <span class="kesatria-log-time">${entry.time}</span>
-                <span class="kesatria-log-icon">${entry.icon}</span>
-                <span class="kesatria-log-msg">${escapeHtml(entry.message)}</span>
-            </div>
-        `).join('');
-    }
-}
-
-function updateLogBadge() {
-    const badge = document.getElementById('kesatria-log-badge');
-    if (badge) badge.textContent = bridgeState.logEntries.length;
-}
-
-function clearLog() {
-    bridgeState.logEntries = [];
-    renderLogEntries();
-    updateLogBadge();
-}
-
-function setupLogFilters() {
-    document.querySelectorAll('.kesatria-filter-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.kesatria-filter-btn').forEach(b => b.classList.remove('kesa-filter-active'));
-            btn.classList.add('kesa-filter-active');
-            bridgeState.logFilter = btn.dataset.filter;
-            renderLogEntries();
-        });
-    });
-    
-    document.getElementById('kesatria-log-pause')?.addEventListener('click', () => {
-        bridgeState.logPaused = !bridgeState.logPaused;
-        const btn = document.getElementById('kesatria-log-pause');
-        if (btn) btn.textContent = bridgeState.logPaused ? '▶' : '⏸';
-    });
-    
-    document.getElementById('kesatria-log-clear')?.addEventListener('click', clearLog);
-}
-
-function escapeHtml(str) {
+function escapeHtml(value) {
     const div = document.createElement('div');
-    div.textContent = str;
+    div.textContent = String(value ?? '');
     return div.innerHTML;
 }
 
-// ─── Stats ──────────────────────────────────────
-function updateStats() {
-    const sent = document.getElementById('kesatria-stat-sent');
-    const recv = document.getElementById('kesatria-stat-received');
-    const errs = document.getElementById('kesatria-stat-errors');
-    const uptime = document.getElementById('kesatria-stat-uptime');
-    const polls = document.getElementById('kesatria-poll-count');
-    
-    if (sent) sent.textContent = bridgeState.stats.sent;
-    if (recv) recv.textContent = bridgeState.stats.received;
-    if (errs) errs.textContent = bridgeState.stats.errors;
-    if (polls) polls.textContent = `${bridgeState.pollCount} polls`;
-    
-    if (uptime) {
-        if (bridgeState.connectedAt) {
-            const diff = Date.now() - bridgeState.connectedAt;
-            const mins = Math.floor(diff / 60000);
-            const hrs = Math.floor(mins / 60);
-            uptime.textContent = hrs > 0 ? `${hrs}h${mins % 60}m` : `${mins}m`;
-        } else {
-            uptime.textContent = '--';
-        }
-    }
+function truncate(value, max = 100) {
+    const text = String(value ?? '');
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function startUptimeTimer() {
-    if (bridgeState.uptimeTimer) clearInterval(bridgeState.uptimeTimer);
-    bridgeState.uptimeTimer = setInterval(updateStats, 10000);
+function formatTime(timestamp = Date.now()) {
+    return new Date(timestamp).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
 }
 
-function stopUptimeTimer() {
-    if (bridgeState.uptimeTimer) {
-        clearInterval(bridgeState.uptimeTimer);
-        bridgeState.uptimeTimer = null;
-    }
-}
-
-// ─── Status UI ──────────────────────────────────
-function updateStatusUI() {
-    const dot = document.getElementById('kesatria-status-dot');
-    const label = document.getElementById('kesatria-status-text');
-    const detail = document.getElementById('kesatria-status-detail');
-    const ringFill = document.getElementById('kesatria-ring-fill');
-    const latency = document.getElementById('kesatria-latency-value');
-    const healthText = document.getElementById('kesatria-health-text');
-    const healthFill = document.querySelector('.kesatria-health-fill');
-    
-    const statusMap = {
-        disconnected: { class: 'kesatria-dot-off', label: 'OFFLINE', detail: '', ring: 0, color: '#555', health: 'OFF', healthColor: '#555' },
-        connected: { class: 'kesatria-dot-connected', label: 'CONNECTED', detail: 'Bridge active', ring: 100, color: '#4CAF50', health: 'STABLE', healthColor: '#4CAF50' },
-        processing: { class: 'kesatria-dot-processing', label: 'PROCESSING', detail: bridgeState.lastMessage, ring: 60, color: '#FFC107', health: 'BUSY', healthColor: '#FFC107' },
-        error: { class: 'kesatria-dot-error', label: 'ERROR', detail: bridgeState.lastMessage, ring: 25, color: '#F44336', health: 'ERROR', healthColor: '#F44336' },
+function log(type, message, details = null) {
+    const entry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type,
+        message,
+        details,
+        timestamp: Date.now(),
     };
-    
-    const s = statusMap[bridgeState.status] || statusMap.disconnected;
-    
-    if (dot) dot.className = `kesatria-dot ${s.class}`;
-    if (label) label.textContent = s.label;
-    if (label) label.style.color = s.color;
-    if (detail) { detail.textContent = s.detail; detail.style.display = s.detail ? 'block' : 'none'; }
-    if (ringFill) { ringFill.style.strokeDashoffset = 100 - s.ring; ringFill.style.stroke = s.color; }
-    if (latency) latency.textContent = bridgeState.latency ? `${bridgeState.latency}ms` : '--ms';
-    if (healthText) { healthText.textContent = s.health; healthText.style.color = s.healthColor; }
-    if (healthFill) healthFill.style.background = `linear-gradient(90deg, ${s.healthColor}, ${s.healthColor}88)`;
+
+    runtime.update(state => ({
+        activity: [entry, ...state.activity].slice(0, MAX_ACTIVITY),
+    }));
+
+    if (type === 'error') console.error('[Kesatria]', message, details || '');
+    else debug(message, details || '');
 }
 
-// ─── Processing Bar ─────────────────────────────
-function showProcessing(text) {
-    const bar = document.getElementById('kesatria-processing');
-    const textEl = document.getElementById('kesatria-processing-text');
-    const fill = document.getElementById('kesatria-progress-bar');
-    const timeEl = document.getElementById('kesatria-processing-time');
-    const steps = document.querySelectorAll('.kesatria-step');
-    
-    if (bar) bar.style.display = 'block';
-    if (textEl) textEl.textContent = text || 'Processing...';
-    
-    // Reset steps
-    steps.forEach((step, i) => {
-        step.className = `kesatria-step${i === 0 ? ' kesa-step-done' : ''}`;
-        const icon = step.querySelector('.kesa-step-icon');
-        if (icon) icon.textContent = i === 0 ? '✓' : '◌';
+function capabilities() {
+    return registry
+        ? registry.list({ source: 'remote' }).map(action => action.id)
+        : [];
+}
+
+function permissionAllowed(permission, { source }) {
+    if (source === 'local') return settings().mode !== 'bridge';
+    if (!settings().enabled || settings().mode === 'local') return false;
+    if (!permission) return true;
+    return settings().permissions?.[permission] !== false;
+}
+
+function registerActions() {
+    registry = new ActionRegistry({
+        permissionResolver: permissionAllowed,
+        contextProvider: ({ execution }) => ({ signal: execution.signal }),
     });
-    
-    // Animate progress
-    if (fill) {
-        fill.style.width = '0%';
-        let progress = 0;
-        const interval = setInterval(() => {
-            progress += Math.random() * 12;
-            if (progress > 90) progress = 90;
-            fill.style.width = `${progress}%`;
-            
-            // Update steps
-            if (progress > 30 && steps[1]) {
-                steps[1].className = 'kesatria-step kesa-step-active';
-                steps[1].querySelector('.kesa-step-icon').textContent = '◉';
-            }
-            if (progress > 60 && steps[2]) {
-                steps[2].className = 'kesatria-step kesa-step-active';
-                steps[2].querySelector('.kesa-step-icon').textContent = '◉';
-            }
-        }, 400);
-        bar._progressInterval = interval;
-    }
-    
-    // Timer
-    bridgeState.processStartTime = Date.now();
-    if (bridgeState.processTimer) clearInterval(bridgeState.processTimer);
-    bridgeState.processTimer = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - bridgeState.processStartTime) / 1000);
-        if (timeEl) timeEl.textContent = `${elapsed}s`;
-    }, 1000);
+
+    const actions = [
+        {
+            id: 'system.status',
+            title: 'System Status',
+            description: 'Read the active chat, character, generation, and bridge state.',
+            category: 'System',
+            icon: '◉',
+            permission: 'system.read',
+            execute: () => ({
+                extension: { name: EXTENSION_NAME, version: VERSION, mode: settings().mode },
+                sillyTavern: sillyTavern.getStatus(),
+                bridge: runtime.get().bridge,
+                queue: {
+                    active: Boolean(runtime.get().queue.active),
+                    pending: runtime.get().queue.pending.length,
+                },
+            }),
+        },
+        {
+            id: 'character.info',
+            title: 'Character Snapshot',
+            description: 'Read the active character, user persona, and current chat metadata.',
+            category: 'Character',
+            icon: '👤',
+            permission: 'character.read',
+            execute: () => sillyTavern.getCharacterInfo(),
+        },
+        {
+            id: 'chat.history',
+            title: 'Read Chat History',
+            description: 'Return a paginated slice of the current SillyTavern chat.',
+            category: 'Chat',
+            icon: '📖',
+            permission: 'chat.read',
+            execute: payload => sillyTavern.getChatHistory(payload),
+        },
+        {
+            id: 'chat.last_response',
+            title: 'Last AI Response',
+            description: 'Read the most recent assistant or character response.',
+            category: 'Chat',
+            icon: '💬',
+            permission: 'chat.read',
+            execute: () => ({ message: sillyTavern.lastAssistantMessage() }),
+        },
+        {
+            id: 'chat.send_as_user',
+            title: 'Send as User',
+            description: 'Send a message directly through the SillyTavern composer and wait for the reply.',
+            category: 'Chat',
+            icon: '➤',
+            permission: 'chat.write',
+            risk: 'medium',
+            input: { field: 'message', label: 'Message', placeholder: 'Write a message as the user…' },
+            execute: (payload, context) => sillyTavern.sendAsUser(
+                payload.message || payload.text,
+                { waitForReply: payload.waitForReply !== false, signal: context.signal },
+            ),
+        },
+        {
+            id: 'generation.quiet',
+            title: 'Quiet Generate',
+            description: 'Generate text with a custom prompt without posting it into the chat.',
+            category: 'Generation',
+            icon: '✦',
+            permission: 'generation.run',
+            input: { field: 'prompt', label: 'Prompt', placeholder: 'Enter a private generation prompt…' },
+            execute: payload => sillyTavern.generateQuiet(payload.prompt || payload.message),
+        },
+        {
+            id: 'generation.continue',
+            title: 'Continue Response',
+            description: 'Trigger SillyTavern’s native continue-generation control.',
+            category: 'Generation',
+            icon: '⏩',
+            permission: 'generation.run',
+            execute: () => sillyTavern.continueGeneration(),
+        },
+        {
+            id: 'generation.regenerate',
+            title: 'Regenerate Response',
+            description: 'Trigger SillyTavern’s native regenerate control.',
+            category: 'Generation',
+            icon: '↻',
+            permission: 'generation.run',
+            risk: 'medium',
+            execute: () => sillyTavern.regenerate(),
+        },
+        {
+            id: 'generation.stop',
+            title: 'Stop Generation',
+            description: 'Stop an active SillyTavern generation.',
+            category: 'Generation',
+            icon: '■',
+            permission: 'generation.stop',
+            execute: () => sillyTavern.stopGeneration(),
+        },
+        {
+            id: 'chat.save',
+            title: 'Save Current Chat',
+            description: 'Force SillyTavern to persist the current chat.',
+            category: 'System',
+            icon: '💾',
+            permission: 'system.save',
+            execute: () => sillyTavern.save(),
+        },
+        {
+            id: 'chat.reload',
+            title: 'Reload Current Chat',
+            description: 'Reload the active conversation from SillyTavern storage.',
+            category: 'System',
+            icon: '⟳',
+            permission: 'system.save',
+            risk: 'medium',
+            sources: ['local'],
+            execute: () => sillyTavern.reload(),
+        },
+    ];
+
+    actions.forEach(action => registry.register(action));
 }
 
-function hideProcessing() {
-    const bar = document.getElementById('kesatria-processing');
-    const fill = document.getElementById('kesatria-progress-bar');
-    const steps = document.querySelectorAll('.kesatria-step');
-    
-    if (bar && bar._progressInterval) clearInterval(bar._progressInterval);
-    if (bridgeState.processTimer) clearInterval(bridgeState.processTimer);
-    
-    // Complete all steps
-    steps.forEach(step => {
-        step.className = 'kesatria-step kesa-step-done';
-        const icon = step.querySelector('.kesa-step-icon');
-        if (icon) icon.textContent = '✓';
+function createQueue() {
+    queue = new ActionQueue(registry, { maxHistory: 100, defaultTimeout: 120000 });
+    queue.subscribe(snapshot => {
+        runtime.update({ queue: snapshot });
+        renderQueue(snapshot);
+        renderOverview();
     });
-    
-    if (fill) fill.style.width = '100%';
-    
-    setTimeout(() => {
-        if (bar) bar.style.display = 'none';
-        if (fill) fill.style.width = '0%';
-    }, 800);
 }
 
-// ─── Latency ────────────────────────────────────
-function measureLatency() {
-    if (!bridgeState.lastPollTime) return;
-    bridgeState.latency = Date.now() - bridgeState.lastPollTime;
-    const el = document.getElementById('kesatria-latency-value');
-    if (el) el.textContent = `${bridgeState.latency}ms`;
-}
+const legacyActionMap = {
+    send_message: 'chat.send_as_user',
+    get_chat_history: 'chat.history',
+    get_character_info: 'character.info',
+    get_chat_list: 'system.status',
+    get_last_response: 'chat.last_response',
+    generate: 'generation.quiet',
+    continue: 'generation.continue',
+    regenerate: 'generation.regenerate',
+    stop_generation: 'generation.stop',
+    save_chat: 'chat.save',
+    get_status: 'system.status',
+};
 
-// ─── Bridge Connection ──────────────────────────
-async function registerSession() {
-    const settings = extension_settings.kesatria;
-    if (!settings?.bridgeUrl) return;
-    
-    try {
-        const cleanUrl = settings.bridgeUrl.replace(/\/$/, '');
-        const response = await fetch(`${cleanUrl}/register?session=${settings.sessionId}`, {
-            method: 'POST',
-            headers: { 'Accept': 'application/json', 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' },
-        });
-        if (response.ok) debugLog('Session registered');
-    } catch (error) {
-        debugLog('Registration error:', error.message);
+function pruneProcessedRequests() {
+    const cutoff = Date.now() - (10 * 60 * 1000);
+    for (const [id, timestamp] of processedRemoteRequests.entries()) {
+        if (timestamp < cutoff) processedRemoteRequests.delete(id);
     }
 }
 
-async function pollBridge() {
-    const settings = extension_settings.kesatria;
-    if (!settings?.enabled || !settings?.bridgeUrl || bridgeState.isProcessing) return;
-    
-    bridgeState.lastPollTime = Date.now();
-    bridgeState.pollCount++;
-    
-    try {
-        const cleanUrl = settings.bridgeUrl.replace(/\/$/, '');
-        const response = await fetch(`${cleanUrl}/poll?session_id=${settings.sessionId}`, {
-            headers: { 'Accept': 'application/json', 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' },
-        });
-        
-        measureLatency();
-        
-        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-        
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) throw new Error('Expected JSON');
-        
-        const data = await response.json();
-        
-        if (bridgeState.status !== 'connected') {
-            bridgeState.status = 'connected';
-            bridgeState.connectedAt = Date.now();
-            updateStatusUI();
-            updateStats();
-            addLogEntry('conn', 'Bridge connected');
-        }
-        
-        if (data.has_pending_request && data.request) {
-            await handleBridgeRequest(data.request);
-        }
-        
-    } catch (error) {
-        debugLog('Polling failed:', error.message);
-        if (bridgeState.status !== 'error') {
-            bridgeState.status = 'error';
-            bridgeState.lastMessage = error.message;
-            bridgeState.stats.errors++;
-            updateStatusUI();
-            updateStats();
-            addLogEntry('err', `Poll error: ${error.message}`);
-        }
-    }
-}
+async function handleRemoteRequest(request) {
+    const requestId = request.request_id || request.id || `remote-${Date.now()}`;
+    pruneProcessedRequests();
 
-// ─── Request Handler ────────────────────────────
-async function handleBridgeRequest(request) {
-    bridgeState.isProcessing = true;
-    bridgeState.status = 'processing';
-    bridgeState.lastMessage = `Processing: ${request.action || 'task'}`;
-    updateStatusUI();
-    
-    const actionLabel = request.action || 'unknown';
-    addLogEntry('recv', `Request: ${actionLabel}`);
-    showProcessing(`Processing ${actionLabel}...`);
-    
+    if (processedRemoteRequests.has(requestId)) {
+        log('warning', `Duplicate remote request ignored: ${requestId}`);
+        return;
+    }
+    processedRemoteRequests.set(requestId, Date.now());
+
+    const actionId = legacyActionMap[request.action] || request.action;
+    log('remote', `Remote request: ${actionId}`, { requestId });
+
     try {
-        let result;
-        switch (request.action) {
-            case 'send_message': result = await handleSendMessage(request); break;
-            case 'get_chat_history': result = await handleGetChatHistory(request); break;
-            case 'get_character_info': result = await handleGetCharacterInfo(request); break;
-            case 'get_chat_list': result = await handleGetChatList(request); break;
-            case 'generate': result = await handleGenerate(request); break;
-            default: result = await handleGenericRequest(request); break;
-        }
-        
-        await sendBridgeResponse({
+        const result = await queue.enqueue({
+            actionId,
+            payload: request.payload || {},
+            source: 'remote',
+            requestId,
+            timeoutMs: request.timeout_ms,
+        });
+
+        await bridge.sendResponse({
             type: 'action_response',
-            session_id: extension_settings.kesatria.sessionId,
+            protocol: 'kesatria/3',
+            request_id: requestId,
+            session_id: settings().sessionId,
+            action: actionId,
             status: 'success',
-            message: 'Processed successfully',
             data: result,
         });
-        
-        bridgeState.stats.received++;
-        bridgeState.lastMessage = `${actionLabel} completed`;
-        addLogEntry('send', `Response: ${actionLabel} ✓`);
+        log('success', `Remote action completed: ${actionId}`);
     } catch (error) {
-        debugLog('Request error:', error);
-        await sendBridgeResponse({
-            type: 'action_response',
-            session_id: extension_settings.kesatria.sessionId,
-            status: 'error',
-            message: error.message || 'Internal error',
-            data: null,
-        });
-        bridgeState.stats.errors++;
-        bridgeState.lastMessage = `Error: ${error.message}`;
-        addLogEntry('err', `Failed: ${error.message}`);
-    } finally {
-        bridgeState.isProcessing = false;
-        bridgeState.status = 'connected';
-        updateStatusUI();
-        updateStats();
-        hideProcessing();
+        try {
+            await bridge.sendResponse({
+                type: 'action_response',
+                protocol: 'kesatria/3',
+                request_id: requestId,
+                session_id: settings().sessionId,
+                action: actionId,
+                status: 'error',
+                message: error.message,
+                data: null,
+            });
+        } catch (responseError) {
+            log('error', `Could not return remote error: ${responseError.message}`);
+        }
+        log('error', `Remote action failed: ${actionId}`, error.message);
     }
 }
 
-// ─── Action Handlers ────────────────────────────
-async function handleSendMessage(request) {
-    const message = request.payload?.message || request.payload?.text;
-    if (!message) throw new Error('No message provided');
-    
-    addLogEntry('info', `Sending: "${message.substring(0, 40)}..."`);
-    
-    const textarea = document.getElementById('send_textarea');
-    const sendButton = document.getElementById('send_but');
-    
-    if (textarea && sendButton) {
-        textarea.value = message;
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        sendButton.click();
-        await waitForGeneration();
-        bridgeState.stats.sent++;
-        return { success: true, sent_message: message, ai_response: getLastAIResponse() };
-    }
-    throw new Error('Could not find send textarea/button');
-}
-
-async function handleGetChatHistory(request) {
-    const context = getContext();
-    const chat = context.chat || [];
-    const limit = request.payload?.limit || 50;
-    const offset = request.payload?.offset || 0;
-    
-    const messages = chat.slice(offset, offset + limit).map((msg, i) => ({
-        index: offset + i, role: msg.is_user ? 'user' : 'assistant',
-        name: msg.name || (msg.is_user ? 'User' : 'Character'),
-        content: msg.mes || '', timestamp: msg.send_date || null, is_system: msg.is_system || false,
-    }));
-    
-    addLogEntry('info', `History: ${messages.length} msgs from ${context.name2 || 'Unknown'}`);
-    return { total_messages: chat.length, offset, limit, messages, character: context.name2, persona: context.name1 };
-}
-
-async function handleGetCharacterInfo(request) {
-    const context = getContext();
-    addLogEntry('info', `Character: ${context.name2 || 'Unknown'}`);
-    
-    return {
-        character: {
-            name: context.name2 || 'Unknown', description: context.description || '',
-            personality: context.personality || '', scenario: context.scenario || '',
-            first_mes: context.first_mes || '',
-            avatar: context.characters?.[context.characterId]?.avatar || null,
+function createBridge() {
+    bridge = new BridgeClient({
+        getSettings: () => ({ ...settings(), capabilities: capabilities() }),
+        onRequest: handleRemoteRequest,
+        onState: bridgeState => {
+            runtime.update({ bridge: bridgeState });
+            renderBridgeState(bridgeState);
+            renderOverview();
         },
-        user: { name: context.name1 || 'User', persona: context.persona || '' },
-        chat: { file: context.chatId || null, length: (context.chat || []).length },
-    };
-}
-
-async function handleGetChatList(request) {
-    const context = getContext();
-    return { current_chat: context.chatId, character: context.name2, message: 'Use browser for full list' };
-}
-
-async function handleGenerate(request) {
-    const prompt = request.payload?.prompt || request.payload?.message;
-    if (!prompt) throw new Error('No prompt');
-    addLogEntry('info', `Generate: "${prompt.substring(0, 40)}..."`);
-    const response = await generateQuietPrompt(prompt);
-    return { success: true, prompt, response };
-}
-
-async function handleGenericRequest(request) {
-    const systemPrompt = `[SYSTEM: HERMES BRIDGE]\nAction: ${request.action}\nContext: ${JSON.stringify(request.context || {})}\nPayload: ${JSON.stringify(request.payload || {})}\nRespond appropriately.`;
-    const response = await generateQuietPrompt(systemPrompt);
-    return { success: true, reply_text: response };
-}
-
-// ─── Helpers ────────────────────────────────────
-function waitForGeneration() {
-    return new Promise((resolve) => {
-        const check = () => {
-            const context = getContext();
-            if (!context.generating) { setTimeout(resolve, 1000); return; }
-            setTimeout(check, 500);
-        };
-        setTimeout(check, 1000);
+        logger: (type, message) => log(type, message),
     });
 }
 
-function getLastAIResponse() {
-    const chat = getContext().chat || [];
-    for (let i = chat.length - 1; i >= 0; i--) {
-        if (!chat[i].is_user) return { content: chat[i].mes, name: chat[i].name, index: i };
-    }
-    return null;
-}
+async function loadInterface() {
+    if (document.getElementById('kesatria-v3-root')) return;
+    const html = await $.get(`${ROOT_PATH}/html/settings.html`);
+    document.body.insertAdjacentHTML('beforeend', html);
 
-async function sendBridgeResponse(payload) {
-    const settings = extension_settings.kesatria;
-    if (!settings?.bridgeUrl) return;
-    try {
-        await fetch(`${settings.bridgeUrl.replace(/\/$/, '')}/response`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' },
-            body: JSON.stringify(payload),
-        });
-    } catch (error) {
-        debugLog('Response send failed:', error);
-    }
-}
-
-// ─── Polling Control ────────────────────────────
-function startPolling() {
-    const settings = extension_settings.kesatria;
-    if (bridgeState.pollingTimer) clearInterval(bridgeState.pollingTimer);
-    
-    if (settings?.enabled && settings?.bridgeUrl) {
-        registerSession();
-        bridgeState.pollingTimer = setInterval(pollBridge, settings.pollingInterval || 2000);
-        bridgeState.status = 'connected';
-        bridgeState.connectedAt = Date.now();
-        updateStatusUI();
-        updateStats();
-        startUptimeTimer();
-        addLogEntry('conn', `Polling started: ${settings.bridgeUrl.substring(0, 40)}...`);
-    }
-}
-
-function stopPolling() {
-    if (bridgeState.pollingTimer) { clearInterval(bridgeState.pollingTimer); bridgeState.pollingTimer = null; }
-    bridgeState.status = 'disconnected';
-    bridgeState.connectedAt = null;
-    updateStatusUI();
-    updateStats();
-    stopUptimeTimer();
-    addLogEntry('info', 'Bridge disconnected');
-}
-
-function toggleBridge() {
-    const settings = extension_settings.kesatria;
-    settings.enabled = !settings.enabled;
-    settings.enabled ? startPolling() : stopPolling();
-    saveSettings();
-    updateToggleUI();
-}
-
-// ─── UI Updates ─────────────────────────────────
-function updateToggleUI() {
-    const settings = extension_settings.kesatria;
-    const btn = document.getElementById('kesatria-toggle');
-    if (btn) {
-        if (settings.enabled) {
-            btn.className = 'kesatria-btn-main kesatria-btn-disable';
-            btn.innerHTML = '<span class="kesatria-btn-ripple"></span><span class="kesatria-btn-icon-inner">⏹</span><span>Disable Bridge</span>';
-        } else {
-            btn.className = 'kesatria-btn-main kesatria-btn-enable';
-            btn.innerHTML = '<span class="kesatria-btn-ripple"></span><span class="kesatria-btn-icon-inner">⚡</span><span>Enable Bridge</span>';
-        }
-    }
-}
-
-function updateFormUI() {
-    const settings = extension_settings.kesatria;
-    const urlInput = document.getElementById('kesatria-bridge-url');
-    if (urlInput) urlInput.value = settings.bridgeUrl || '';
-    const sessionInput = document.getElementById('kesatria-session-id');
-    if (sessionInput) sessionInput.value = settings.sessionId || '';
-    const autoConnect = document.getElementById('kesatria-auto-connect');
-    if (autoConnect) autoConnect.checked = settings.autoConnect || false;
-    const debug = document.getElementById('kesatria-debug');
-    if (debug) debug.checked = settings.debugMode || false;
-}
-
-function updateUI() {
-    updateToggleUI();
-    updateFormUI();
-    updateStatusUI();
-    updateStats();
-    renderLogEntries();
-}
-
-// ─── Test Connection ────────────────────────────
-async function testConnection() {
-    const settings = extension_settings.kesatria;
-    const btn = document.getElementById('kesatria-test-btn');
-    
-    if (!settings?.bridgeUrl) { addLogEntry('err', 'No bridge URL'); return; }
-    
-    if (btn) { btn.textContent = '⏳ Testing...'; btn.disabled = true; }
-    
-    try {
-        const start = Date.now();
-        const response = await fetch(`${settings.bridgeUrl.replace(/\/$/, '')}/health`, {
-            headers: { 'Accept': 'application/json', 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' },
-        });
-        const latency = Date.now() - start;
-        
-        if (response.ok) {
-            const data = await response.json();
-            addLogEntry('conn', `Connection OK (${latency}ms) — ${data.sessions || 0} sessions`);
-        } else {
-            addLogEntry('err', `HTTP ${response.status}`);
-        }
-    } catch (error) {
-        addLogEntry('err', `Failed: ${error.message}`);
-    } finally {
-        if (btn) { btn.textContent = '⚡ Test'; btn.disabled = false; }
-    }
-}
-
-// ─── Quick Actions ──────────────────────────────
-function setupQuickActions() {
-    // Action buttons
-    document.querySelectorAll('.kesatria-quick-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const action = btn.dataset.action;
-            
-            if (action === 'send_message') {
-                const composer = document.getElementById('kesatria-send-composer');
-                if (composer) composer.style.display = composer.style.display === 'none' ? 'block' : 'none';
-                document.getElementById('kesatria-generate-composer').style.display = 'none';
-                return;
-            }
-            
-            if (action === 'generate') {
-                const composer = document.getElementById('kesatria-generate-composer');
-                if (composer) composer.style.display = composer.style.display === 'none' ? 'block' : 'none';
-                document.getElementById('kesatria-send-composer').style.display = 'none';
-                return;
-            }
-            
-            if (!extension_settings.kesatria?.enabled) { addLogEntry('err', 'Bridge not enabled'); return; }
-            
-            addLogEntry('info', `Quick: ${action}`);
-            try {
-                await fetch(`${extension_settings.kesatria.bridgeUrl.replace(/\/$/, '')}/submit`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({
-                        session_id: extension_settings.kesatria.sessionId,
-                        action: action,
-                        payload: action === 'get_chat_history' ? { limit: 10 } : {},
-                    }),
-                });
-                addLogEntry('send', `${action} submitted`);
-            } catch (error) {
-                addLogEntry('err', `Submit failed: ${error.message}`);
-            }
-        });
-    });
-    
-    // Send message
-    document.getElementById('kesatria-send-confirm')?.addEventListener('click', async () => {
-        const textArea = document.getElementById('kesatria-send-text');
-        const message = textArea?.value?.trim();
-        if (!message) { addLogEntry('err', 'Empty message'); return; }
-        if (!extension_settings.kesatria?.enabled) { addLogEntry('err', 'Bridge not enabled'); return; }
-        
-        try {
-            await fetch(`${extension_settings.kesatria.bridgeUrl.replace(/\/$/, '')}/submit`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                body: JSON.stringify({ session_id: extension_settings.kesatria.sessionId, action: 'send_message', payload: { message } }),
-            });
-            addLogEntry('send', `Message sent: "${message.substring(0, 30)}..."`);
-            textArea.value = '';
-            document.getElementById('kesatria-send-composer').style.display = 'none';
-            document.getElementById('kesatria-char-count').textContent = '0';
-        } catch (error) {
-            addLogEntry('err', `Send failed: ${error.message}`);
-        }
-    });
-    
-    // Generate
-    document.getElementById('kesatria-generate-confirm')?.addEventListener('click', async () => {
-        const textArea = document.getElementById('kesatria-generate-text');
-        const prompt = textArea?.value?.trim();
-        if (!prompt) { addLogEntry('err', 'Empty prompt'); return; }
-        if (!extension_settings.kesatria?.enabled) { addLogEntry('err', 'Bridge not enabled'); return; }
-        
-        try {
-            await fetch(`${extension_settings.kesatria.bridgeUrl.replace(/\/$/, '')}/submit`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                body: JSON.stringify({ session_id: extension_settings.kesatria.sessionId, action: 'generate', payload: { prompt } }),
-            });
-            addLogEntry('send', `Generate submitted: "${prompt.substring(0, 30)}..."`);
-            textArea.value = '';
-            document.getElementById('kesatria-generate-composer').style.display = 'none';
-        } catch (error) {
-            addLogEntry('err', `Generate failed: ${error.message}`);
-        }
-    });
-    
-    // Close buttons
-    document.getElementById('kesatria-composer-close')?.addEventListener('click', () => {
-        document.getElementById('kesatria-send-composer').style.display = 'none';
-    });
-    document.getElementById('kesatria-send-cancel')?.addEventListener('click', () => {
-        document.getElementById('kesatria-send-composer').style.display = 'none';
-    });
-    document.getElementById('kesatria-generate-close')?.addEventListener('click', () => {
-        document.getElementById('kesatria-generate-composer').style.display = 'none';
-    });
-    document.getElementById('kesatria-generate-cancel')?.addEventListener('click', () => {
-        document.getElementById('kesatria-generate-composer').style.display = 'none';
-    });
-    
-    // Character counters
-    document.getElementById('kesatria-send-text')?.addEventListener('input', (e) => {
-        document.getElementById('kesatria-char-count').textContent = e.target.value.length;
-    });
-    document.getElementById('kesatria-generate-text')?.addEventListener('input', (e) => {
-        document.getElementById('kesatria-generate-char-count').textContent = e.target.value.length;
-    });
-}
-
-// ─── Character Tab ──────────────────────────────
-function setupCharacterTab() {
-    document.getElementById('kesatria-refresh-char')?.addEventListener('click', refreshCharacterInfo);
-}
-
-async function refreshCharacterInfo() {
-    const panel = document.getElementById('kesatria-char-panel');
-    if (!panel) return;
-    
-    try {
-        const context = getContext();
-        const name = context.name2 || 'Unknown';
-        const avatar = context.characters?.[context.characterId]?.avatar;
-        const desc = context.description || 'No description';
-        const personality = context.personality || '';
-        const scenario = context.scenario || '';
-        const msgCount = (context.chat || []).length;
-        
-        panel.innerHTML = `
-            <div class="kesatria-char-card">
-                <div class="kesatria-char-avatar">
-                    ${avatar ? `<img src="${avatar}" alt="${name}">` : '👤'}
+    const settingsContainer = document.getElementById('extensions_settings');
+    if (settingsContainer && !document.getElementById('kesatria-extension-entry')) {
+        settingsContainer.insertAdjacentHTML('beforeend', `
+            <div id="kesatria-extension-entry" class="kesatria-extension-entry">
+                <div>
+                    <strong>⚔️ Kesatria Command Center</strong>
+                    <small>v${VERSION} · Local-first SillyTavern control</small>
                 </div>
-                <div class="kesatria-char-info">
-                    <div class="kesatria-char-name">${escapeHtml(name)}</div>
-                    <div class="kesatria-char-meta">
-                        📝 ${msgCount} messages · ${context.name1 || 'User'} ↔ ${name}
-                        ${personality ? `<br>🎭 ${escapeHtml(personality.substring(0, 80))}` : ''}
-                        ${scenario ? `<br>🌍 ${escapeHtml(scenario.substring(0, 80))}` : ''}
-                    </div>
-                    <div class="kesatria-char-desc">${escapeHtml(desc.substring(0, 200))}</div>
+                <button type="button" class="menu_button" data-kesatria-open>Open</button>
+            </div>
+        `);
+    }
+}
+
+function setTab(tabName) {
+    runtime.update({ activeTab: tabName });
+    document.querySelectorAll('[data-kesatria-tab]').forEach(button => {
+        button.classList.toggle('is-active', button.dataset.kesatriaTab === tabName);
+    });
+    document.querySelectorAll('[data-kesatria-page]').forEach(page => {
+        page.classList.toggle('is-active', page.dataset.kesatriaPage === tabName);
+    });
+}
+
+function openApp() {
+    const overlay = document.getElementById('kesatria-modal-overlay');
+    if (!overlay) return;
+    overlay.classList.add('is-open');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('kesatria-modal-open');
+    refreshContextDisplay();
+    renderOverview();
+}
+
+function closeApp() {
+    const overlay = document.getElementById('kesatria-modal-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('is-open');
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('kesatria-modal-open');
+}
+
+function actionResultLabel(result) {
+    if (result?.reply?.content) return truncate(result.reply.content, 120);
+    if (result?.response) return truncate(result.response, 120);
+    if (result?.messages) return `${result.messages.length} messages returned`;
+    return 'Action completed';
+}
+
+async function runLocalAction(actionId, payload = {}) {
+    const action = registry.get(actionId);
+    if (!action) return;
+
+    log('local', `Local action queued: ${action.title}`);
+    try {
+        const result = await queue.enqueue({ actionId, payload, source: 'local' });
+        log('success', `${action.title}: ${actionResultLabel(result)}`, result);
+        showResult(action.title, result);
+    } catch (error) {
+        log('error', `${action.title} failed: ${error.message}`);
+        showToast(error.message, 'error');
+    }
+}
+
+function openCommandDialog(action) {
+    pendingDialogAction = action;
+    const dialog = document.getElementById('kesatria-command-dialog');
+    const title = document.getElementById('kesatria-dialog-title');
+    const label = document.getElementById('kesatria-dialog-label');
+    const input = document.getElementById('kesatria-dialog-input');
+    if (!dialog || !input) return;
+
+    title.textContent = action.title;
+    label.textContent = action.input.label;
+    input.placeholder = action.input.placeholder || '';
+    input.value = '';
+    dialog.classList.add('is-open');
+    setTimeout(() => input.focus(), 50);
+}
+
+function closeCommandDialog() {
+    document.getElementById('kesatria-command-dialog')?.classList.remove('is-open');
+    pendingDialogAction = null;
+}
+
+function showResult(title, result) {
+    const panel = document.getElementById('kesatria-result-panel');
+    const titleNode = document.getElementById('kesatria-result-title');
+    const content = document.getElementById('kesatria-result-content');
+    if (!panel || !content) return;
+    titleNode.textContent = title;
+    content.textContent = JSON.stringify(result, null, 2);
+    panel.classList.add('is-open');
+}
+
+function closeResult() {
+    document.getElementById('kesatria-result-panel')?.classList.remove('is-open');
+}
+
+function showToast(message, type = 'info') {
+    const host = document.getElementById('kesatria-toast-host');
+    if (!host) return;
+    const toast = document.createElement('div');
+    toast.className = `kesatria-toast is-${type}`;
+    toast.textContent = message;
+    host.append(toast);
+    setTimeout(() => toast.classList.add('is-visible'), 10);
+    setTimeout(() => {
+        toast.classList.remove('is-visible');
+        setTimeout(() => toast.remove(), 250);
+    }, 3500);
+}
+
+function renderActions(filter = '') {
+    const container = document.getElementById('kesatria-command-list');
+    if (!container) return;
+
+    const normalizedFilter = filter.trim().toLowerCase();
+    const actions = registry.list({ source: 'local' }).filter(action => {
+        const haystack = `${action.title} ${action.description} ${action.id} ${action.category}`.toLowerCase();
+        return !normalizedFilter || haystack.includes(normalizedFilter);
+    });
+
+    container.innerHTML = actions.map(action => `
+        <button type="button" class="kesatria-command-card" data-kesatria-action="${escapeHtml(action.id)}">
+            <span class="kesatria-command-icon">${action.icon}</span>
+            <span class="kesatria-command-copy">
+                <strong>${escapeHtml(action.title)}</strong>
+                <small>${escapeHtml(action.description)}</small>
+                <code>${escapeHtml(action.id)}</code>
+            </span>
+            <span class="kesatria-command-arrow">›</span>
+        </button>
+    `).join('') || '<div class="kesatria-empty">No matching commands.</div>';
+}
+
+function renderQueue(snapshot = runtime.get().queue) {
+    const container = document.getElementById('kesatria-queue-list');
+    if (!container) return;
+
+    const rows = [];
+    if (snapshot.active) rows.push(snapshot.active);
+    rows.push(...snapshot.pending);
+    rows.push(...snapshot.history.slice(0, 30));
+
+    container.innerHTML = rows.map(item => {
+        const duration = item.startedAt && item.finishedAt ? `${((item.finishedAt - item.startedAt) / 1000).toFixed(1)}s` : '';
+        const cancellable = ['queued', 'running'].includes(item.status);
+        return `
+            <div class="kesatria-queue-row is-${escapeHtml(item.status)}">
+                <div class="kesatria-queue-state"><span></span>${escapeHtml(item.status)}</div>
+                <div class="kesatria-queue-main">
+                    <strong>${escapeHtml(item.actionTitle || item.actionId)}</strong>
+                    <small>${escapeHtml(item.source)} · ${formatTime(item.createdAt)} ${duration ? `· ${duration}` : ''}</small>
+                    ${item.error ? `<em>${escapeHtml(item.error)}</em>` : ''}
                 </div>
+                ${cancellable ? `<button type="button" class="kesatria-icon-button" data-kesatria-cancel="${escapeHtml(item.id)}" title="Cancel">✕</button>` : ''}
             </div>
         `;
-    } catch (error) {
-        panel.innerHTML = `
-            <div class="kesatria-char-empty">
-                <div class="kesatria-char-empty-icon">⚠️</div>
-                <div class="kesatria-char-empty-text">Could not load character</div>
-                <button id="kesatria-refresh-char" class="kesatria-btn-sm">Retry</button>
-            </div>`;
-        document.getElementById('kesatria-refresh-char')?.addEventListener('click', refreshCharacterInfo);
+    }).join('') || '<div class="kesatria-empty">The action queue is empty.</div>';
+}
+
+function renderActivity(activity = runtime.get().activity) {
+    const container = document.getElementById('kesatria-activity-list');
+    if (!container) return;
+    container.innerHTML = activity.map(entry => `
+        <div class="kesatria-activity-row is-${escapeHtml(entry.type)}">
+            <span class="kesatria-activity-time">${formatTime(entry.timestamp)}</span>
+            <span class="kesatria-activity-dot"></span>
+            <span>${escapeHtml(entry.message)}</span>
+        </div>
+    `).join('') || '<div class="kesatria-empty">No activity yet.</div>';
+}
+
+function bridgeStatusLabel(status) {
+    return ({
+        offline: 'Offline',
+        connecting: 'Connecting',
+        connected: 'Connected',
+        error: 'Connection Error',
+    })[status] || status;
+}
+
+function renderBridgeState(bridgeState = runtime.get().bridge) {
+    const statusNodes = document.querySelectorAll('[data-kesatria-bridge-status]');
+    statusNodes.forEach(node => {
+        node.textContent = bridgeStatusLabel(bridgeState.status);
+        node.dataset.status = bridgeState.status;
+    });
+
+    document.querySelectorAll('[data-kesatria-latency]').forEach(node => {
+        node.textContent = bridgeState.latency == null ? '-- ms' : `${bridgeState.latency} ms`;
+    });
+
+    const button = document.getElementById('kesatria-bridge-toggle');
+    if (button) {
+        button.textContent = settings().enabled ? 'Disconnect Bridge' : 'Connect Bridge';
+        button.classList.toggle('is-danger', settings().enabled);
     }
 }
 
-// ─── Initialize ─────────────────────────────────
-jQuery(async () => {
-    loadSettings();
-    
-    const settingsHtml = await renderSettingsPanel();
-    const settingsContainer = document.getElementById('extensions_settings');
-    if (settingsContainer) settingsContainer.insertAdjacentHTML('beforeend', settingsHtml);
-    
-    // Setup all components
-    setupTabs();
-    setupLogFilters();
-    setupQuickActions();
-    setupCharacterTab();
-    
-    // Event listeners
-    document.getElementById('kesatria-toggle')?.addEventListener('click', toggleBridge);
-    
-    document.getElementById('kesatria-bridge-url')?.addEventListener('change', (e) => {
-        extension_settings.kesatria.bridgeUrl = e.target.value;
+function renderOverview() {
+    const state = runtime.get();
+    const context = sillyTavern?.getStatus?.() || {};
+    const values = {
+        'overview-mode': settings()?.mode || 'hybrid',
+        'overview-character': context.character || 'No character',
+        'overview-messages': String(context.messageCount ?? 0),
+        'overview-queue': String((state.queue.pending?.length || 0) + (state.queue.active ? 1 : 0)),
+        'overview-bridge': bridgeStatusLabel(state.bridge.status),
+        'overview-latency': state.bridge.latency == null ? '-- ms' : `${state.bridge.latency} ms`,
+    };
+
+    Object.entries(values).forEach(([id, value]) => {
+        const node = document.getElementById(`kesatria-${id}`);
+        if (node) node.textContent = value;
+    });
+}
+
+function refreshContextDisplay() {
+    try {
+        const info = sillyTavern.getCharacterInfo();
+        const name = document.getElementById('kesatria-active-character');
+        const meta = document.getElementById('kesatria-active-meta');
+        const avatar = document.getElementById('kesatria-active-avatar');
+        if (name) name.textContent = info.character.name;
+        if (meta) meta.textContent = `${info.user.name} ↔ ${info.character.name} · ${info.chat.messageCount} messages`;
+        if (avatar) {
+            if (info.character.avatar) {
+                avatar.innerHTML = `<img src="/characters/${encodeURIComponent(info.character.avatar)}" alt="">`;
+            } else {
+                avatar.textContent = '👤';
+            }
+        }
+    } catch (error) {
+        debug('Context display failed', error);
+    }
+}
+
+function syncSettingsUI() {
+    const current = settings();
+    const fields = {
+        'kesatria-bridge-url': current.bridgeUrl,
+        'kesatria-auth-token': current.authToken,
+        'kesatria-session-id': current.sessionId,
+        'kesatria-polling-interval': current.pollingInterval,
+        'kesatria-mode': current.mode,
+    };
+
+    Object.entries(fields).forEach(([id, value]) => {
+        const node = document.getElementById(id);
+        if (node) node.value = value ?? '';
+    });
+
+    const checks = {
+        'kesatria-auto-connect': current.autoConnect,
+        'kesatria-debug-mode': current.debugMode,
+        'kesatria-reduced-motion': current.reducedMotion,
+    };
+    Object.entries(checks).forEach(([id, checked]) => {
+        const node = document.getElementById(id);
+        if (node) node.checked = Boolean(checked);
+    });
+
+    document.querySelectorAll('[data-kesatria-permission]').forEach(input => {
+        input.checked = current.permissions?.[input.dataset.kesatriaPermission] !== false;
+    });
+
+    document.documentElement.classList.toggle('kesatria-reduce-motion', Boolean(current.reducedMotion));
+}
+
+async function toggleBridge() {
+    if (settings().enabled) {
+        settings().enabled = false;
+        bridge.stop();
         saveSettings();
-        if (extension_settings.kesatria.enabled) { stopPolling(); startPolling(); }
-    });
-    
-    document.getElementById('kesatria-session-id')?.addEventListener('change', (e) => {
-        extension_settings.kesatria.sessionId = e.target.value;
+        log('info', 'Bridge disconnected by user');
+        renderBridgeState();
+        return;
+    }
+
+    if (settings().mode === 'local') {
+        showToast('Change mode to Hybrid or Bridge before connecting.', 'error');
+        return;
+    }
+
+    settings().enabled = true;
+    saveSettings();
+    try {
+        await bridge.start();
+        log('info', 'Bridge connection started');
+    } catch (error) {
+        settings().enabled = false;
         saveSettings();
+        bridge.stop();
+        log('error', `Bridge start failed: ${error.message}`);
+        showToast(error.message, 'error');
+    }
+    renderBridgeState();
+}
+
+async function testBridge() {
+    const button = document.getElementById('kesatria-test-bridge');
+    if (button) button.disabled = true;
+    try {
+        const result = await bridge.test();
+        log('success', `Bridge health check passed (${result.latency}ms)`, result);
+        showToast(`Bridge reachable in ${result.latency}ms`, 'success');
+        showResult('Bridge Health', result);
+    } catch (error) {
+        log('error', `Bridge health check failed: ${error.message}`);
+        showToast(error.message, 'error');
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+function saveFormSettings() {
+    const current = settings();
+    current.bridgeUrl = document.getElementById('kesatria-bridge-url')?.value?.trim() || '';
+    current.authToken = document.getElementById('kesatria-auth-token')?.value || '';
+    current.sessionId = document.getElementById('kesatria-session-id')?.value?.trim() || createSessionId();
+    current.pollingInterval = Math.min(30000, Math.max(750, Number(document.getElementById('kesatria-polling-interval')?.value) || 2000));
+    current.mode = document.getElementById('kesatria-mode')?.value || 'hybrid';
+    current.autoConnect = Boolean(document.getElementById('kesatria-auto-connect')?.checked);
+    current.debugMode = Boolean(document.getElementById('kesatria-debug-mode')?.checked);
+    current.reducedMotion = Boolean(document.getElementById('kesatria-reduced-motion')?.checked);
+
+    document.querySelectorAll('[data-kesatria-permission]').forEach(input => {
+        current.permissions[input.dataset.kesatriaPermission] = input.checked;
     });
-    
-    document.getElementById('kesatria-auto-connect')?.addEventListener('change', (e) => {
-        extension_settings.kesatria.autoConnect = e.target.checked;
+
+    saveSettings();
+    document.documentElement.classList.toggle('kesatria-reduce-motion', current.reducedMotion);
+    renderOverview();
+    showToast('Settings saved', 'success');
+    log('info', 'Settings updated');
+
+    if (current.enabled) {
+        bridge.stop({ silent: true });
+        void bridge.start();
+    }
+}
+
+function resetSession() {
+    settings().sessionId = createSessionId();
+    const input = document.getElementById('kesatria-session-id');
+    if (input) input.value = settings().sessionId;
+    saveSettings();
+    showToast('New session ID generated', 'success');
+}
+
+function setupLauncherDrag() {
+    const launcher = document.getElementById('kesatria-launcher');
+    if (!launcher) return;
+
+    const saved = settings().launcherPosition;
+    if (saved?.top != null && saved?.side) {
+        launcher.style.top = `${Math.max(12, Math.min(window.innerHeight - 72, saved.top))}px`;
+        launcher.style.bottom = 'auto';
+        launcher.style[saved.side] = '18px';
+        launcher.style[saved.side === 'left' ? 'right' : 'left'] = 'auto';
+    }
+
+    let start = null;
+    let moved = false;
+
+    launcher.addEventListener('pointerdown', event => {
+        start = { x: event.clientX, y: event.clientY, rect: launcher.getBoundingClientRect() };
+        moved = false;
+        launcher.setPointerCapture(event.pointerId);
+    });
+
+    launcher.addEventListener('pointermove', event => {
+        if (!start) return;
+        const dx = event.clientX - start.x;
+        const dy = event.clientY - start.y;
+        if (Math.abs(dx) + Math.abs(dy) > 6) moved = true;
+        if (!moved) return;
+
+        const left = Math.max(8, Math.min(window.innerWidth - launcher.offsetWidth - 8, start.rect.left + dx));
+        const top = Math.max(8, Math.min(window.innerHeight - launcher.offsetHeight - 8, start.rect.top + dy));
+        launcher.style.left = `${left}px`;
+        launcher.style.right = 'auto';
+        launcher.style.top = `${top}px`;
+        launcher.style.bottom = 'auto';
+    });
+
+    launcher.addEventListener('pointerup', event => {
+        if (!start) return;
+        launcher.releasePointerCapture(event.pointerId);
+        const rect = launcher.getBoundingClientRect();
+        const side = rect.left + rect.width / 2 < window.innerWidth / 2 ? 'left' : 'right';
+        launcher.style[side] = '18px';
+        launcher.style[side === 'left' ? 'right' : 'left'] = 'auto';
+        settings().launcherPosition = { side, top: Math.round(rect.top) };
         saveSettings();
+        start = null;
+        if (!moved) openApp();
     });
-    
-    document.getElementById('kesatria-debug')?.addEventListener('change', (e) => {
-        extension_settings.kesatria.debugMode = e.target.checked;
-        saveSettings();
+}
+
+function setupUiEvents() {
+    document.addEventListener('click', event => {
+        const openButton = event.target.closest('[data-kesatria-open]');
+        if (openButton) {
+            event.preventDefault();
+            openApp();
+            return;
+        }
+
+        if (event.target.closest('[data-kesatria-close]')) {
+            event.preventDefault();
+            closeApp();
+            return;
+        }
+
+        const tab = event.target.closest('[data-kesatria-tab]');
+        if (tab) {
+            setTab(tab.dataset.kesatriaTab);
+            return;
+        }
+
+        const actionButton = event.target.closest('[data-kesatria-action]');
+        if (actionButton) {
+            const action = registry.get(actionButton.dataset.kesatriaAction);
+            if (action?.input) openCommandDialog(action);
+            else void runLocalAction(action.id);
+            return;
+        }
+
+        const cancelButton = event.target.closest('[data-kesatria-cancel]');
+        if (cancelButton) queue.cancel(cancelButton.dataset.kesatriaCancel);
     });
-    
-    document.getElementById('kesatria-reconnect')?.addEventListener('click', () => {
-        if (extension_settings.kesatria.enabled) { stopPolling(); startPolling(); }
+
+    document.getElementById('kesatria-close-dialog')?.addEventListener('click', closeCommandDialog);
+    document.getElementById('kesatria-dialog-cancel')?.addEventListener('click', closeCommandDialog);
+    document.getElementById('kesatria-dialog-run')?.addEventListener('click', () => {
+        if (!pendingDialogAction) return;
+        const value = document.getElementById('kesatria-dialog-input')?.value?.trim();
+        if (!value) {
+            showToast(`${pendingDialogAction.input.label} cannot be empty`, 'error');
+            return;
+        }
+        const action = pendingDialogAction;
+        closeCommandDialog();
+        void runLocalAction(action.id, { [action.input.field]: value });
     });
-    
-    document.getElementById('kesatria-test-btn')?.addEventListener('click', testConnection);
-    
-    document.getElementById('kesatria-copy-session')?.addEventListener('click', () => {
-        const input = document.getElementById('kesatria-session-id');
-        if (input) {
-            navigator.clipboard.writeText(input.value).then(() => {
-                addLogEntry('info', 'Session ID copied ✓');
-            }).catch(() => {
-                input.select();
-                document.execCommand('copy');
-                addLogEntry('info', 'Session ID copied ✓');
-            });
+
+    document.getElementById('kesatria-close-result')?.addEventListener('click', closeResult);
+    document.getElementById('kesatria-result-copy')?.addEventListener('click', async () => {
+        const text = document.getElementById('kesatria-result-content')?.textContent || '';
+        await navigator.clipboard.writeText(text);
+        showToast('Result copied', 'success');
+    });
+
+    document.getElementById('kesatria-command-search')?.addEventListener('input', event => renderActions(event.target.value));
+    document.getElementById('kesatria-bridge-toggle')?.addEventListener('click', () => void toggleBridge());
+    document.getElementById('kesatria-test-bridge')?.addEventListener('click', () => void testBridge());
+    document.getElementById('kesatria-save-settings')?.addEventListener('click', saveFormSettings);
+    document.getElementById('kesatria-save-policy')?.addEventListener('click', saveFormSettings);
+    document.getElementById('kesatria-reset-session')?.addEventListener('click', resetSession);
+    document.getElementById('kesatria-clear-queue')?.addEventListener('click', () => queue.clearCompleted());
+    document.getElementById('kesatria-clear-activity')?.addEventListener('click', () => {
+        runtime.update({ activity: [] });
+        renderActivity([]);
+    });
+
+    document.addEventListener('keydown', event => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+            event.preventDefault();
+            openApp();
+            setTab('commands');
+            setTimeout(() => document.getElementById('kesatria-command-search')?.focus(), 50);
+        }
+        if (event.key === 'Escape') {
+            closeCommandDialog();
+            closeResult();
         }
     });
-    
-    // Auto-connect
-    if (extension_settings.kesatria.autoConnect && extension_settings.kesatria.enabled) {
-        startPolling();
-    }
-    
-    updateUI();
-    console.log('[⚔️ Kesatria] v2.1 loaded — Warrior Command Center ready');
-});
 
-// ─── Render Panel ───────────────────────────────
-async function renderSettingsPanel() {
-    try {
-        const html = await $.get('scripts/extensions/third-party/kesatria-penghubung-baja-hitam/html/settings.html');
-        return html;
-    } catch (error) {
-        debugLog('Template load failed:', error);
-        return '';
-    }
+    setupLauncherDrag();
 }
+
+function bindSillyTavernEvents() {
+    const bind = (type, handler) => {
+        if (type && eventSource?.on) eventSource.on(type, handler);
+    };
+
+    bind(event_types?.APP_READY, () => {
+        refreshContextDisplay();
+        renderOverview();
+    });
+    bind(event_types?.CHAT_CHANGED, () => {
+        refreshContextDisplay();
+        renderOverview();
+        log('info', 'Active chat changed');
+    });
+    bind(event_types?.MESSAGE_RECEIVED, () => {
+        renderOverview();
+        log('info', 'SillyTavern received a new message');
+    });
+    bind(event_types?.GENERATION_STARTED, () => renderOverview());
+    bind(event_types?.GENERATION_ENDED, () => renderOverview());
+}
+
+async function initialize() {
+    migrateSettings();
+    sillyTavern = new SillyTavernAdapter({
+        getContext,
+        generateQuietPrompt,
+        saveChat,
+        reloadCurrentChat,
+    });
+
+    registerActions();
+    createQueue();
+    createBridge();
+
+    try {
+        await loadInterface();
+    } catch (error) {
+        console.error('[Kesatria] UI load failed', error);
+        return;
+    }
+
+    syncSettingsUI();
+    setupUiEvents();
+    bindSillyTavernEvents();
+    renderActions();
+    renderQueue();
+    renderActivity();
+    renderBridgeState();
+    refreshContextDisplay();
+    renderOverview();
+
+    log('success', `Kesatria Command Center v${VERSION} loaded`);
+
+    if (settings().autoConnect && settings().enabled && settings().mode !== 'local') {
+        try {
+            await bridge.start();
+        } catch (error) {
+            settings().enabled = false;
+            saveSettings();
+            log('error', `Auto-connect failed: ${error.message}`);
+        }
+    }
+
+    console.log(`[⚔️ Kesatria] v${VERSION} loaded — local-first command center ready`);
+}
+
+jQuery(() => void initialize());
