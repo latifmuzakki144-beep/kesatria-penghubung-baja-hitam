@@ -1,5 +1,5 @@
 /**
- * ⚔️ Kesatria Penghubung Baja Hitam v3.0.0
+ * ⚔️ Kesatria Penghubung Baja Hitam v3.0.2
  * Black Steel Command Center
  */
 
@@ -27,6 +27,21 @@
     box-sizing: border-box;
 }
 
+#kesatria-v3-root {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100dvw !important;
+    height: 100dvh !important;
+    z-index: 2147483600 !important;
+    pointer-events: none !important;
+    isolation: isolate;
+}
+
+#kesatria-v3-root > * { pointer-events: auto; }
+
+html.kesatria-modal-open,
+body.kesatria-modal-open { overflow: hidden !important; }
+
 body.kesatria-modal-open {
     overflow: hidden;
 }
@@ -35,7 +50,7 @@ body.kesatria-modal-open {
     position: fixed;
     right: 18px;
     bottom: calc(88px + env(safe-area-inset-bottom, 0px));
-    z-index: 2147483000;
+    z-index: 2147483647 !important;
     width: 58px;
     height: 58px;
     border: 1px solid rgba(255, 177, 61, 0.5);
@@ -70,7 +85,7 @@ body.kesatria-modal-open {
 .kesatria-modal-overlay {
     position: fixed;
     inset: 0;
-    z-index: 30000;
+    z-index: 2147483646 !important;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -86,7 +101,7 @@ body.kesatria-modal-open {
 
 .kesatria-app {
     width: min(1180px, 100%);
-    height: min(820px, calc(100vh - 48px));
+    height: min(820px, calc(100dvh - 48px));
     color: var(--kesa-text);
     background:
         radial-gradient(circle at 78% 4%, rgba(255,177,61,.08), transparent 27%),
@@ -371,6 +386,55 @@ button:disabled { opacity: .45; cursor: not-allowed; }
     .kesatria-launcher { right: 12px; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); width: 52px; height: 52px; border-radius: 16px; }
 }
 
+
+@media screen and (max-width: 1000px) {
+    #kesatria-v3-root {
+        position: fixed !important;
+        inset: 0 !important;
+        width: 100dvw !important;
+        height: 100dvh !important;
+        max-width: none !important;
+        max-height: none !important;
+        transform: none !important;
+        contain: none !important;
+    }
+
+    .kesatria-modal-overlay {
+        position: fixed !important;
+        inset: 0 !important;
+        width: 100dvw !important;
+        height: 100dvh !important;
+        max-width: none !important;
+        max-height: none !important;
+        padding: 0 !important;
+    }
+
+    .kesatria-modal-overlay.is-open {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+
+    .kesatria-app {
+        width: 100dvw !important;
+        height: 100dvh !important;
+        max-width: none !important;
+        max-height: none !important;
+        border-radius: 0 !important;
+        transform: none !important;
+    }
+
+    .kesatria-launcher {
+        position: fixed !important;
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        right: max(12px, env(safe-area-inset-right, 0px)) !important;
+        bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+}
+
 .kesatria-reduce-motion #kesatria-v3-root *,
 .kesatria-reduce-motion #kesatria-v3-root *::before,
 .kesatria-reduce-motion #kesatria-v3-root *::after {
@@ -378,4 +442,95 @@ button:disabled { opacity: .45; cursor: not-allowed; }
     animation-iteration-count: 1 !important;
     transition-duration: .001ms !important;
     scroll-behavior: auto !important;
+}
+
+
+/* v3.0.2 native-dialog and responsive layout overrides */
+#kesatria-v3-root {
+    position: static !important; inset: auto !important; width: 0 !important; height: 0 !important;
+    max-width: 0 !important; max-height: 0 !important; pointer-events: none !important; isolation: auto !important;
+}
+#kesatria-v3-root > * { pointer-events: auto; }
+
+.kesatria-launcher { z-index: 9999 !important; }
+html.kesatria-modal-open .kesatria-launcher, body.kesatria-modal-open .kesatria-launcher {
+    opacity: 0 !important; visibility: hidden !important; pointer-events: none !important;
+}
+
+dialog.kesatria-modal-overlay {
+    box-sizing: border-box !important; position: fixed !important; inset: 0 !important;
+    width: 100dvw !important; height: 100dvh !important; max-width: none !important; max-height: none !important;
+    margin: 0 !important; padding: 20px !important; border: 0 !important; outline: 0 !important;
+    color: var(--kesa-text) !important; background: transparent !important; overflow: hidden !important;
+    opacity: 1 !important; visibility: visible !important; align-items: center !important; justify-content: center !important;
+}
+dialog.kesatria-modal-overlay:not([open]) { display: none !important; }
+dialog.kesatria-modal-overlay[open] { display: flex !important; }
+dialog.kesatria-modal-overlay::backdrop {
+    background: rgba(3,5,9,.84); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+
+.kesatria-app {
+    width: min(1120px, calc(100dvw - 40px)) !important; height: min(760px, calc(100dvh - 40px)) !important;
+    max-width: 1120px !important; max-height: 760px !important; transform: none !important;
+}
+.kesatria-app-body { grid-template-columns: 210px minmax(0,1fr) !important; min-height: 0 !important; }
+.kesatria-sidebar { position: static !important; height: auto !important; min-height: 0 !important; }
+.kesatria-content { min-height: 0 !important; overflow: auto !important; overscroll-behavior: contain; }
+.kesatria-sheet, .kesatria-result-panel, .kesatria-toast-host { z-index: 20 !important; }
+
+.kesatria-native-launcher {
+    display: none; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; height: 36px;
+    min-width: 36px; min-height: 36px; margin: 0 4px; padding: 0; border: 0; border-radius: 10px;
+    color: var(--kesa-gold-2); background: rgba(255,177,61,.09); cursor: pointer; touch-action: manipulation;
+}
+.kesatria-native-launcher span { font-size: 19px; line-height: 1; }
+
+@media (max-width: 1100px) and (min-width: 901px) {
+    .kesatria-stat-grid, .kesatria-quick-grid { grid-template-columns: repeat(2,minmax(0,1fr)) !important; }
+}
+
+@media (max-width: 900px) {
+    dialog.kesatria-modal-overlay { padding: 0 !important; }
+    .kesatria-app { width: 100dvw !important; height: 100dvh !important; max-width: none !important; max-height: none !important; border: 0 !important; border-radius: 0 !important; }
+    .kesatria-app-body { display: flex !important; flex-direction: column !important; min-height: 0 !important; }
+    .kesatria-content { order: 1 !important; flex: 1 1 auto !important; min-height: 0 !important; padding: 18px 14px !important; }
+    .kesatria-sidebar {
+        order: 2 !important; flex: 0 0 auto !important; position: static !important; width: 100% !important; height: auto !important;
+        padding: 6px 8px calc(6px + env(safe-area-inset-bottom,0px)) !important; border: 0 !important; border-top: 1px solid var(--kesa-border) !important;
+        background: rgba(9,11,16,.98) !important; display: flex !important; flex-direction: row !important; gap: 4px !important; overflow-x: auto !important; scrollbar-width: none;
+    }
+    .kesatria-sidebar::-webkit-scrollbar { display: none; }
+    .kesatria-nav-item {
+        flex: 1 0 54px !important; min-width: 54px !important; width: auto !important; min-height: 48px !important; padding: 4px 5px !important;
+        flex-direction: column !important; justify-content: center !important; gap: 2px !important; text-align: center !important;
+    }
+    .kesatria-nav-item span { width: auto !important; font-size: 16px !important; }
+    .kesatria-nav-item b { font-size: 7px !important; white-space: nowrap; }
+    .kesatria-sidebar-footer { display: none !important; }
+    .kesatria-stat-grid, .kesatria-quick-grid { grid-template-columns: repeat(2,minmax(0,1fr)) !important; }
+    .kesatria-native-launcher { display: inline-flex !important; }
+    .kesatria-launcher { display: none !important; }
+}
+
+@media (max-width: 620px) {
+    .kesatria-app-header { min-height: 60px !important; padding: 9px 10px !important; }
+    .kesatria-brand-mark { width: 36px !important; height: 36px !important; }
+    .kesatria-brand h2 { font-size: 12px !important; }
+    .kesatria-brand p { display: none !important; }
+    .kesatria-content { padding: 14px 11px !important; }
+    .kesatria-page-heading { margin-bottom: 15px !important; }
+    .kesatria-page-heading h3 { font-size: 20px !important; }
+    .kesatria-page-heading p { font-size: 11px !important; }
+    .kesatria-stat-grid { grid-template-columns: repeat(2,minmax(0,1fr)) !important; gap: 8px !important; }
+    .kesatria-stat-card { min-height: 92px !important; padding: 11px !important; }
+    .kesatria-stat-card strong { margin-top: 11px !important; font-size: 17px !important; }
+    .kesatria-quick-grid, .kesatria-command-list, .kesatria-form-grid, .kesatria-settings-stack { grid-template-columns: 1fr !important; }
+    .kesatria-character-hero { padding: 12px !important; }
+    .kesatria-character-copy small { white-space: normal !important; }
+    .kesatria-form-actions { flex-wrap: wrap; }
+    .kesatria-form-actions > button { flex: 1 1 130px; min-height: 44px; }
+    .kesatria-sheet { padding: 10px !important; }
+    .kesatria-sheet-card { max-height: calc(100dvh - 20px); overflow: auto; }
+    .kesatria-result-panel { width: 100dvw !important; height: 100dvh !important; }
 }

@@ -1,5 +1,5 @@
 /**
- * ⚔️ Kesatria Penghubung Baja Hitam v3.0.2
+ * ⚔️ Kesatria Penghubung Baja Hitam v3.0.3
  * Local-first SillyTavern Command Center with optional Hermes/OpenClaw bridge.
  */
 
@@ -21,7 +21,7 @@ import { SillyTavernAdapter } from './src/adapters/sillytavern-adapter.js';
 
 const EXTENSION_KEY = 'kesatria';
 const EXTENSION_NAME = 'kesatria-penghubung-baja-hitam';
-const VERSION = '3.0.2';
+const VERSION = '3.0.3';
 const ROOT_PATH = `scripts/extensions/third-party/${EXTENSION_NAME}`;
 const MAX_ACTIVITY = 200;
 
@@ -71,6 +71,8 @@ let queue;
 let bridge;
 let sillyTavern;
 let pendingDialogAction = null;
+let initializePromise = null;
+let interfaceObserver = null;
 const processedRemoteRequests = new Map();
 
 function settings() {
@@ -390,12 +392,14 @@ function ensureInterfaceMounted() {
 
     const launcher = document.getElementById('kesatria-launcher');
     if (launcher) {
-        launcher.style.display = 'grid';
-        launcher.style.visibility = 'visible';
-        launcher.style.opacity = '1';
-        launcher.style.pointerEvents = 'auto';
-        launcher.style.zIndex = '2147483000';
+        launcher.style.removeProperty('display');
+        launcher.style.removeProperty('visibility');
+        launcher.style.removeProperty('opacity');
+        launcher.style.removeProperty('pointer-events');
+        launcher.style.removeProperty('z-index');
     }
+
+    ensureNativeMobileLauncher();
 
     const settingsContainer = document.getElementById('extensions_settings');
     if (settingsContainer && !document.getElementById('kesatria-extension-entry')) {
@@ -409,6 +413,18 @@ function ensureInterfaceMounted() {
             </div>
         `);
     }
+
+    bindDirectOpenControls();
+}
+
+function observeSillyTavernInterface() {
+    if (interfaceObserver) return;
+    interfaceObserver = new MutationObserver(() => {
+        // SillyTavern may rebuild mobile drawers and their settings contents.
+        // Re-add the entry and keep the portal outside the drawer tree.
+        ensureInterfaceMounted();
+    });
+    interfaceObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 function setTab(tabName) {
@@ -422,11 +438,28 @@ function setTab(tabName) {
 }
 
 function openApp() {
+    ensureInterfaceMounted();
     const overlay = document.getElementById('kesatria-modal-overlay');
-    if (!overlay) return;
+    if (!overlay) {
+        console.error('[Kesatria] Command Center dialog is missing');
+        return;
+    }
+
+    try {
+        if (overlay instanceof HTMLDialogElement && !overlay.open) {
+            overlay.showModal();
+        } else if (!(overlay instanceof HTMLDialogElement)) {
+            overlay.setAttribute('open', '');
+        }
+    } catch (error) {
+        console.error('[Kesatria] Could not open native dialog', error);
+        overlay.setAttribute('open', '');
+    }
+
     overlay.classList.add('is-open');
-    overlay.setAttribute('aria-hidden', 'false');
+    document.documentElement.classList.add('kesatria-modal-open');
     document.body.classList.add('kesatria-modal-open');
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     refreshContextDisplay();
     renderOverview();
 }
@@ -434,8 +467,14 @@ function openApp() {
 function closeApp() {
     const overlay = document.getElementById('kesatria-modal-overlay');
     if (!overlay) return;
+
     overlay.classList.remove('is-open');
-    overlay.setAttribute('aria-hidden', 'true');
+    if (overlay instanceof HTMLDialogElement && overlay.open) {
+        overlay.close();
+    } else {
+        overlay.removeAttribute('open');
+    }
+    document.documentElement.classList.remove('kesatria-modal-open');
     document.body.classList.remove('kesatria-modal-open');
 }
 
@@ -800,37 +839,71 @@ function setupLauncherDrag() {
 }
 
 
-function bindDirectOpenControls() {
-    const launcher = document.getElementById('kesatria-launcher');
-    const entryOpen = document.getElementById('kesatria-extension-open');
+function ensureNativeMobileLauncher() {
+    const host = document.getElementById('leftSendForm');
+    if (!host) return;
 
-    if (launcher && !launcher.dataset.kesatriaBound) {
-        launcher.dataset.kesatriaBound = 'true';
-        launcher.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            openApp();
-        });
+    let button = document.getElementById('kesatria-native-launcher');
+    if (!button) {
+        button = document.createElement('button');
+        button.id = 'kesatria-native-launcher';
+        button.type = 'button';
+        button.className = 'interactable kesatria-native-launcher';
+        button.title = 'Open Kesatria Command Center';
+        button.setAttribute('aria-label', 'Open Kesatria Command Center');
+        button.innerHTML = '<span aria-hidden="true">⚔️</span>';
+
+        const extensionButton = document.getElementById('extensionsMenuButton');
+        if (extensionButton?.parentElement === host) extensionButton.insertAdjacentElement('afterend', button);
+        else host.appendChild(button);
     }
 
+    if (!button.dataset.kesatriaBound) {
+        button.dataset.kesatriaBound = 'true';
+        const activate = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+            openApp();
+        };
+        button.addEventListener('pointerup', activate, { capture: true });
+        button.addEventListener('click', activate, { capture: true });
+    }
+}
+
+function bindDirectOpenControls() {
+    const entryOpen = document.getElementById('kesatria-extension-open');
     if (entryOpen && !entryOpen.dataset.kesatriaBound) {
         entryOpen.dataset.kesatriaBound = 'true';
-        entryOpen.addEventListener('click', event => {
+        const activate = event => {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation?.();
             openApp();
-        });
-        entryOpen.addEventListener('touchend', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            openApp();
-        }, { passive: false });
+        };
+        entryOpen.addEventListener('pointerup', activate, { capture: true });
+        entryOpen.addEventListener('touchend', activate, { capture: true, passive: false });
+        entryOpen.addEventListener('click', activate, { capture: true });
     }
+    ensureNativeMobileLauncher();
 }
 
 function setupUiEvents() {
     ensureInterfaceMounted();
     bindDirectOpenControls();
+
+    const appDialog = document.getElementById('kesatria-modal-overlay');
+    if (appDialog && !appDialog.dataset.kesatriaDialogBound) {
+        appDialog.dataset.kesatriaDialogBound = 'true';
+        appDialog.addEventListener('click', event => {
+            if (event.target === appDialog) closeApp();
+        });
+        appDialog.addEventListener('close', () => {
+            appDialog.classList.remove('is-open');
+            document.documentElement.classList.remove('kesatria-modal-open');
+            document.body.classList.remove('kesatria-modal-open');
+        });
+    }
 
     document.addEventListener('click', event => {
         const openButton = event.target.closest('[data-kesatria-open]');
@@ -939,7 +1012,7 @@ function bindSillyTavernEvents() {
     bind(event_types?.GENERATION_ENDED, () => renderOverview());
 }
 
-async function initialize() {
+async function initializeInternal() {
     migrateSettings();
     sillyTavern = new SillyTavernAdapter({
         getContext,
@@ -962,6 +1035,7 @@ async function initialize() {
     syncSettingsUI();
     bindDirectOpenControls();
     setupUiEvents();
+    observeSillyTavernInterface();
     bindSillyTavernEvents();
     renderActions();
     renderQueue();
@@ -987,4 +1061,23 @@ async function initialize() {
     console.log(`[⚔️ Kesatria] v${VERSION} loaded — local-first command center ready`);
 }
 
-jQuery(() => void initialize());
+export function activate() {
+    if (!initializePromise) {
+        initializePromise = initializeInternal().catch(error => {
+            initializePromise = null;
+            console.error('[Kesatria] Initialization failed', error);
+            throw error;
+        });
+    }
+    return initializePromise;
+}
+
+function scheduleActivation() {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => void activate(), { once: true });
+    } else {
+        queueMicrotask(() => void activate());
+    }
+}
+
+scheduleActivation();
