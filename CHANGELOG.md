@@ -1,13 +1,28 @@
 # Changelog
 
-## v3.0.2
-- Consolidated release: includes the v3.0.1 settings.html markup fix and the Open-button hotfix.
-- Re-mount the command center UI when SillyTavern re-renders panels (`ensureInterfaceMounted`).
-- Direct `click`/`touchend` handlers for the launcher and extension Open entry (`bindDirectOpenControls`).
-- Force the floating launcher above mobile UI layers (high `z-index`, visibility/opacity reset).
-- Fix SillyTavern mobile compatibility for the Open button.
+## v3.0.3
+- Consolidated release of the v3.0.2 mobile-dialog-fix.
+- Use a native `<dialog>` so the app opens above SillyTavern popups on mobile.
+- Add a native mobile launcher beside the SillyTavern composer.
+- Rebuild desktop, tablet, and mobile layout rules.
+- Keep command sheets, result panels, and toasts inside the dialog top layer.
+- Harden pointer/touch activation for the Open button.
 
-## v3.0.1
+## v3.0.2
+- Use a native `<dialog>` so the app opens above SillyTavern popups on mobile.
+- Add a native mobile launcher beside the SillyTavern composer.
+- Rebuild desktop, tablet, and mobile layout rules.
+- Keep command sheets, result panels, and toasts inside the dialog top layer.
+- Harden pointer/touch activation for the Open button.
+
+## v3.0.2
+- Fix SillyTavern mobile portal mounting by attaching the UI under `<html>` instead of the fixed/clipped `<body>`.
+- Force the launcher and modal above mobile drawers.
+- Add pointer, touch, and click capture for the Open control.
+- Re-mount the extension entry when SillyTavern rebuilds mobile drawer content.
+- Export an idempotent `activate()` function while preserving automatic SillyTavern startup.
+
+## v3.0.2
 - Fix SillyTavern mobile compatibility for the Open button.
 - Re-mount the command center UI when SillyTavern re-renders panels.
 - Force the floating launcher to stay visible above mobile UI layers.
@@ -15,7 +30,7 @@
 
 # Changelog
 
-## 3.0.1
+## 3.0.2
 
 ### Added
 
