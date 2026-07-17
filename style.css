@@ -34,8 +34,8 @@ body.kesatria-modal-open {
 .kesatria-launcher {
     position: fixed;
     right: 18px;
-    bottom: 88px;
-    z-index: 30010;
+    bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+    z-index: 2147483000;
     width: 58px;
     height: 58px;
     border: 1px solid rgba(255, 177, 61, 0.5);
@@ -47,6 +47,8 @@ body.kesatria-modal-open {
     touch-action: none;
     user-select: none;
     display: grid;
+    visibility: visible;
+    opacity: 1;
     place-items: center;
     transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
 }
@@ -366,7 +368,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
     .kesatria-character-hero .kesatria-secondary-button { width: 100%; }
     .kesatria-queue-row { grid-template-columns: 1fr auto; }
     .kesatria-queue-state { grid-column: 1 / -1; }
-    .kesatria-launcher { right: 12px; bottom: 76px; width: 52px; height: 52px; border-radius: 16px; }
+    .kesatria-launcher { right: 12px; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); width: 52px; height: 52px; border-radius: 16px; }
 }
 
 .kesatria-reduce-motion #kesatria-v3-root *,

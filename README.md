@@ -4,7 +4,7 @@
 
 Kesatria v3 turns the extension from a bridge monitor into a command layer for SillyTavern. Commands started inside SillyTavern run locally and no longer travel to the bridge and back. Hermes/OpenClaw can still use the same action system remotely when bridge mode is enabled.
 
-## Highlights in v3.0.0
+## Highlights in v3.0.2
 
 - Local-first commands that work without Hermes, OpenClaw, or a bridge server
 - Shared Action Registry for local and remote capabilities

@@ -1,5 +1,5 @@
 /**
- * ⚔️ Kesatria Penghubung Baja Hitam v3.0.0
+ * ⚔️ Kesatria Penghubung Baja Hitam v3.0.2
  * Local-first SillyTavern Command Center with optional Hermes/OpenClaw bridge.
  */
 
@@ -21,7 +21,7 @@ import { SillyTavernAdapter } from './src/adapters/sillytavern-adapter.js';
 
 const EXTENSION_KEY = 'kesatria';
 const EXTENSION_NAME = 'kesatria-penghubung-baja-hitam';
-const VERSION = '3.0.0';
+const VERSION = '3.0.2';
 const ROOT_PATH = `scripts/extensions/third-party/${EXTENSION_NAME}`;
 const MAX_ACTIVITY = 200;
 
@@ -375,9 +375,27 @@ function createBridge() {
 }
 
 async function loadInterface() {
-    if (document.getElementById('kesatria-v3-root')) return;
-    const html = await $.get(`${ROOT_PATH}/html/settings.html`);
-    document.body.insertAdjacentHTML('beforeend', html);
+    if (!document.getElementById('kesatria-v3-root')) {
+        const html = await $.get(`${ROOT_PATH}/html/settings.html`);
+        document.body.insertAdjacentHTML('beforeend', html);
+    }
+    ensureInterfaceMounted();
+}
+
+function ensureInterfaceMounted() {
+    const root = document.getElementById('kesatria-v3-root');
+    if (root && root.parentElement !== document.body) {
+        document.body.appendChild(root);
+    }
+
+    const launcher = document.getElementById('kesatria-launcher');
+    if (launcher) {
+        launcher.style.display = 'grid';
+        launcher.style.visibility = 'visible';
+        launcher.style.opacity = '1';
+        launcher.style.pointerEvents = 'auto';
+        launcher.style.zIndex = '2147483000';
+    }
 
     const settingsContainer = document.getElementById('extensions_settings');
     if (settingsContainer && !document.getElementById('kesatria-extension-entry')) {
@@ -387,7 +405,7 @@ async function loadInterface() {
                     <strong>⚔️ Kesatria Command Center</strong>
                     <small>v${VERSION} · Local-first SillyTavern control</small>
                 </div>
-                <button type="button" class="menu_button" data-kesatria-open>Open</button>
+                <button id="kesatria-extension-open" type="button" class="menu_button" data-kesatria-open>Open</button>
             </div>
         `);
     }
@@ -781,7 +799,39 @@ function setupLauncherDrag() {
     });
 }
 
+
+function bindDirectOpenControls() {
+    const launcher = document.getElementById('kesatria-launcher');
+    const entryOpen = document.getElementById('kesatria-extension-open');
+
+    if (launcher && !launcher.dataset.kesatriaBound) {
+        launcher.dataset.kesatriaBound = 'true';
+        launcher.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            openApp();
+        });
+    }
+
+    if (entryOpen && !entryOpen.dataset.kesatriaBound) {
+        entryOpen.dataset.kesatriaBound = 'true';
+        entryOpen.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            openApp();
+        });
+        entryOpen.addEventListener('touchend', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            openApp();
+        }, { passive: false });
+    }
+}
+
 function setupUiEvents() {
+    ensureInterfaceMounted();
+    bindDirectOpenControls();
+
     document.addEventListener('click', event => {
         const openButton = event.target.closest('[data-kesatria-open]');
         if (openButton) {
@@ -869,10 +919,14 @@ function bindSillyTavernEvents() {
     };
 
     bind(event_types?.APP_READY, () => {
+        ensureInterfaceMounted();
+        bindDirectOpenControls();
         refreshContextDisplay();
         renderOverview();
     });
     bind(event_types?.CHAT_CHANGED, () => {
+        ensureInterfaceMounted();
+        bindDirectOpenControls();
         refreshContextDisplay();
         renderOverview();
         log('info', 'Active chat changed');
@@ -906,6 +960,7 @@ async function initialize() {
     }
 
     syncSettingsUI();
+    bindDirectOpenControls();
     setupUiEvents();
     bindSillyTavernEvents();
     renderActions();
@@ -914,6 +969,8 @@ async function initialize() {
     renderBridgeState();
     refreshContextDisplay();
     renderOverview();
+    ensureInterfaceMounted();
+    bindDirectOpenControls();
 
     log('success', `Kesatria Command Center v${VERSION} loaded`);
 
